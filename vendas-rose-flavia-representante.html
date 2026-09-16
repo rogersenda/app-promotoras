@@ -109,6 +109,7 @@ main{padding:8px 12px 0}
 <div id="hist" style="display:none"></div>
 <div class="ft" id="footer">
   <div style="flex:0 0 auto;text-align:center;padding:0 4px"><div id="tn">0</div><div class="tlab" id="tlab">itens</div></div>
+  <button id="bnew" style="flex:0 0 auto;border:1px solid var(--ln);background:#fff;color:#374151;border-radius:10px;padding:14px 12px;font-size:13px;font-weight:700;cursor:pointer">🔄 Nova</button>
   <button id="ba" disabled>Gerar resumo</button>
 </div>
 <nav class="tabs">
@@ -120,6 +121,7 @@ main{padding:8px 12px 0}
 <div id="tst"></div><script>
 var CFG=window.__C__;var PV=window.__PV__;var PI=window.__PI__;
 PV.forEach(function(p,i){p.id='v'+i});PI.forEach(function(p,i){p.id='i'+i});
+var _dirty=false;function _md(){_dirty=true}function _cd(){_dirty=false}
 var tab='i',qV={},qI={},openC={},fBrand='all',fQ='',lojaA='';
 var LKEY='lojas_v4_'+CFG.nome;
 function carregaLojas(){try{var s=localStorage.getItem(LKEY);if(s)return JSON.parse(s);}catch(e){}return CFG.lojas.slice();}
@@ -139,7 +141,19 @@ function hdR(){
   if(!vis.length){$('sc').innerHTML='<span style="font-size:12px;color:#9aa0a9">Nenhuma loja encontrada</span>';return;}
   $('sc').innerHTML=vis.map(function(n){return '<button class="scc'+(n===lojaA?' sel':'')+'" onclick="selL(this)">'+n+'</button>';}).join('');
 }
-function selL(b){lojaA=b.textContent;document.querySelectorAll('.scc').forEach(function(x){x.classList.toggle('sel',x.textContent===lojaA)});sv()}
+function selL(b){
+  var novaLoja=b.textContent;
+  if(novaLoja===lojaA){return;}
+  if(_dirty&&temContagem()){
+    if(!confirm('Voce tem uma contagem nao salva da loja "'+lojaA+'".\n\nTrocar de loja SEM salvar vai manter os itens contados na tela. Deseja LIMPAR e comecar a contagem da nova loja do zero?\n\nOK = limpar e comecar do zero\nCancelar = manter a contagem atual')){
+      lojaA=novaLoja;document.querySelectorAll('.scc').forEach(function(x){x.classList.toggle('sel',x.textContent===lojaA)});sv();return;
+    }
+    limpaContagem(true);
+  }
+  lojaA=novaLoja;document.querySelectorAll('.scc').forEach(function(x){x.classList.toggle('sel',x.textContent===lojaA)});sv();
+}
+function temContagem(){return Object.keys(qV).length>0||Object.keys(qI).length>0;}
+function limpaContagem(silent){qV={};qI={};_cd();sv();if($('obs'))$('obs').value='';render();if(!silent)tst('Contagem zerada');}
 function abreGerenciar(){renderGer();$('ovLojas').classList.add('sh');}
 function renderGer(){var box=$('lojasLista');if(!lojas.length){box.innerHTML='<div class="nolojas">Sem lojas. Adicione abaixo.</div>';return;}box.innerHTML=lojas.map(function(n,i){return '<div class="litem"><span class="ln">'+n+'</span><button class="ldel" onclick="delLoja('+i+')">✕</button></div>';}).join('');}
 function addLoja(){var inp=$('novaLojaInp');var v=inp.value.trim();if(!v)return;if(lojas.some(function(x){return x.toLowerCase()===v.toLowerCase()})){tst('Loja ja existe');return;}lojas.push(v);salvaLojas();inp.value='';if(!lojaA)lojaA=v;renderGer();hdR();tst('Loja adicionada');inp.focus();}
@@ -188,9 +202,9 @@ function render(){
   $('ls').innerHTML=h;rTot();
 }
 function tog(k){if(!fQ&&fBrand!=='mk'){openC[k]=!openC[k];render()}}
-function adj(id,d){var p=PV.find(function(x){return x.id===id});if(!p)return;var v=Math.max(0,(qV[p.id]||0)+d);if(v===0)delete qV[p.id];else qV[p.id]=v;var inp=$('q'+id);if(inp)inp.value=v;var row=$('r'+id);if(row)row.className='row'+(v>0?' rv':'');var stp=$('s'+id);if(stp)stp.className='stp'+(v>0?'':' sz');sv();rTot()}
-function chg(id,val){var p=PV.find(function(x){return x.id===id});if(!p)return;var v=Math.max(0,parseInt(val)||0);if(v===0)delete qV[p.id];else qV[p.id]=v;var row=$('r'+id);if(row)row.className='row'+(v>0?' rv':'');var stp=$('s'+id);if(stp)stp.className='stp'+(v>0?'':' sz');sv();rTot()}
-function iChg(id,val){var p=PI.find(function(x){return x.id===id});if(!p)return;if(val==='')delete qI[p.id];else qI[p.id]=Math.max(0,parseInt(val)||0);var row=$('r'+id);if(row)row.className='row'+(qI[p.id]!==undefined?' ri':'');var inp=$('q'+id);if(inp)inp.className=qI[p.id]!==undefined?'fi':'';sv();rTot()}
+function adj(id,d){var p=PV.find(function(x){return x.id===id});if(!p)return;_md();var v=Math.max(0,(qV[p.id]||0)+d);if(v===0)delete qV[p.id];else qV[p.id]=v;var inp=$('q'+id);if(inp)inp.value=v;var row=$('r'+id);if(row)row.className='row'+(v>0?' rv':'');var stp=$('s'+id);if(stp)stp.className='stp'+(v>0?'':' sz');sv();rTot()}
+function chg(id,val){var p=PV.find(function(x){return x.id===id});if(!p)return;_md();var v=Math.max(0,parseInt(val)||0);if(v===0)delete qV[p.id];else qV[p.id]=v;var row=$('r'+id);if(row)row.className='row'+(v>0?' rv':'');var stp=$('s'+id);if(stp)stp.className='stp'+(v>0?'':' sz');sv();rTot()}
+function iChg(id,val){var p=PI.find(function(x){return x.id===id});if(!p)return;_md();if(val==='')delete qI[p.id];else qI[p.id]=Math.max(0,parseInt(val)||0);var row=$('r'+id);if(row)row.className='row'+(qI[p.id]!==undefined?' ri':'');var inp=$('q'+id);if(inp)inp.className=qI[p.id]!==undefined?'fi':'';sv();rTot()}
 function rTot(){if(tab==='v'){var t=Object.values(qV).reduce(function(a,b){return a+(+b||0)},0);$('tn').textContent=t;$('tlab').textContent='itens vendidos';$('ba').disabled=t===0;$('ba').textContent='Gerar resumo';}else if(tab==='i'){var t=Object.keys(qI).length;$('tn').textContent=t;$('tlab').textContent='itens contados';$('ba').disabled=t===0;$('ba').textContent='Gerar inventario';}}
 function swTab(t){
   tab=t;
@@ -250,7 +264,7 @@ $('bsv').addEventListener('click',function(){
     linhas:src.map(function(p){return{b:p.b,c:p.cat,l:p.label,r:p.ref,e:p.ean,q:tab==='v'?qV[p.id]:qI[p.id]}})};
   var h=getH();h.unshift(reg);if(h.length>200)h=h.slice(0,200);setH(h);
   $('ovRes').classList.remove('sh');
-  tst('Salvo no Historico! (a contagem continua na tela)');
+  _cd();tst('Salvo no Historico! (a contagem continua na tela)');
 });
 function renderHist(){
   var h=getH();
@@ -277,6 +291,10 @@ function histCSV(i){var reg=getH()[i];if(reg)cp(bCSVfromReg(reg),'CSV copiado!')
 function histView(i){var reg=getH()[i];if(!reg)return;$('stit').textContent=(reg.tipo==='v'?'Vendas':'Inventario')+' - '+(reg.loja||'--');$('spv').textContent=bWAfromReg(reg);$('ovRes').classList.add('sh');}
 document.querySelectorAll('[data-cl]').forEach(function(b){b.addEventListener('click',function(){b.closest('.ov').classList.remove('sh')})});
 document.querySelectorAll('.ov').forEach(function(o){o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('sh')})});
+if($('bnew'))$('bnew').addEventListener('click',function(){
+  if(!temContagem()){tst('Nada para limpar');return;}
+  if(confirm('Comecar uma NOVA contagem?\n\nIsso vai apagar os itens contados na tela agora. Se ainda nao salvou no Historico, salve antes.\n\nOK = limpar tudo\nCancelar = manter')){limpaContagem(false);}
+});
 ld();if(!$('dt').value)$('dt').value=new Date().toISOString().slice(0,10);
 hdR();bcR();render();
 </script></body></html>
