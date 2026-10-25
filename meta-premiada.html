@@ -132,13 +132,39 @@ function faixaDe(total,faixas){let f=null;for(const x of ordF(faixas))if(total>=
 function proxFaixa(total,faixas){return ordF(faixas).find(x=>total<x.min)||null}
 const aprov=c=>c.status==='aprovado'?(+c.valorAprovado||0):0;
 
+// ---------- Formatos, verba e sorteio ----------
+const FORMATOS={faixas:'Compre e Ganhe',sorteio:'Compre e Concorra',ambos:'Ganhe + Concorra'};
+const FORMATO_DESC={faixas:'Bateu a meta, ganhou: prêmio garantido por faixa de compra. Não depende de autorização de sorteio.',sorteio:'Cada valor de compra vira 1 número da sorte e os prêmios são sorteados pela Loteria Federal. Exige autorização prévia da SPA/MF.',ambos:'Faixas com prêmio garantido e, além disso, números da sorte para o sorteio. Exige autorização prévia da SPA/MF.'};
+const fmt=c=>c?.formato||(c?.sorteio?.ativo?'ambos':'faixas');
+const temFaixas=c=>fmt(c)!=='sorteio', temSorteio=c=>fmt(c)!=='faixas';
+const VERBA={pct_extra:'Percentual do pedido extra',pct_total:'Percentual do pedido total',fixo:'Valor fixo (R$)'};
+function verbaDe(r){const ex=Math.max(0,(+r.pedidoCampanha||0)-(+r.pedidoBase||0)),t=r.verbaTipo||'pct_extra';return t==='fixo'?(+r.verbaValor||0):t==='pct_total'?(+r.pedidoCampanha||0)*(+r.verbaPct||0)/100:ex*(+r.verbaPct||0)/100}
+function custoPremios(r,c){return(temFaixas(c)?(r.faixas||[]).reduce((s,f)=>s+(+f.custo||0)*(+f.qtd||0),0):0)+(temSorteio(c)?(r.premiosSorteio||[]).reduce((s,p)=>s+(+p.custo||0)*(+p.qtd||1),0):0)}
+const mascCPF=c=>(c=dig(c)).length===11?`***.${c.slice(3,6)}.${c.slice(6,9)}-**`:'***';
+const mascNome=n=>{const p=String(n||'').trim().split(/\s+/);return p[0]+(p[1]?' '+p[1][0]+'.':'')};
+async function sha256(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+// Texto canônico da lista pública (mesma regra no app e no banco): rede|número|CPF mascarado, em ordem.
+const linhasLista=L=>L.slice().sort((a,b)=>a.redeId.localeCompare(b.redeId)||a.n.localeCompare(b.n)).map(x=>`${x.redeId}|${x.n}|${x.cpf}`).join('\n');
+// Apuração: posição inicial = 1º prêmio da Loteria Federal mod total de números da rede; prêmios seguintes nos próximos números, 1 por CPF.
+function apurar(pool,base,qtd){const P=pool.slice().sort((a,b)=>a.n.localeCompare(b.n));if(!P.length)return{pos:null,ganh:[]};const pos=Number(base)%P.length,ganh=[],usados=new Set();
+  for(let i=0;i<P.length&&ganh.length<qtd;i++){const x=P[(pos+i)%P.length];if(usados.has(x.key))continue;usados.add(x.key);ganh.push(x)}return{pos,ganh}}
+const expandePremios=ps=>(ps||[]).flatMap(p=>Array(Math.max(1,Math.round(+p.qtd||1))).fill(p.premio));
+function calcNumeros(cu,ca,C){const v=+ca?.sorteio?.valorPorNumero||0;if(!temSorteio(ca)||!(v>0)||ca.sorteio?.congelado)return[];
+  const ou=C.filter(z=>z.id!==cu.id&&z.campId===cu.campId&&z.clienteId===cu.clienteId&&z.redeId===cu.redeId&&z.status==='aprovado');
+  const tot=ou.reduce((s,z)=>s+aprov(z),0)+(+cu.valorAprovado||0),tem=ou.reduce((s,z)=>s+(z.numeros||[]).length,0);
+  let seq=Math.max(0,...C.filter(z=>z.campId===cu.campId).flatMap(z=>(z.numeros||[]).map(Number)));
+  return Array.from({length:Math.max(0,Math.floor(tot/v)-tem)},()=>String(++seq).padStart(6,'0'))}
+function resultadoHTML(c,redes){const R=c.sorteio?.resultados;if(!R)return'';
+  return`<div class="okb"><b>Resultado do sorteio</b> — Loteria Federal, concurso ${esc(R.extracao)} de ${fd(R.dataExtracao)} · 1º prêmio: <b>${esc(R.base)}</b></div>`+Object.entries(R.redes||{}).map(([rid,x])=>{const r=redes.find(z=>z.id===rid);
+    return`<h3>${esc(r?.nome||rid)}</h3><p class="mu">${x.total} números · ${esc(R.base)} ÷ ${x.total} deixa resto ${x.pos} → começa no ${x.pos+1}º número da lista em ordem crescente</p><div class="tbl"><table><tr><th>Prêmio</th><th>Número</th><th>Ganhador</th></tr>${x.ganhadores.map(g=>`<tr><td>${esc(g.premio)}</td><td><b>${esc(g.n)}</b></td><td>${esc(g.nome)} · ${esc(g.cpf)}</td></tr>`).join('')}</table></div>`}).join('')}
+
 // ---------- Armazenamento: modo demonstração ----------
 const Demo={k:t=>'mp_demo_'+t,
   all(t){try{return JSON.parse(localStorage.getItem(this.k(t))||'[]')}catch(e){return[]}},
   save(t,r){try{localStorage.setItem(this.k(t),JSON.stringify(r))}catch(e){throw new Error('Memória do navegador cheia (modo demonstração). Apague os dados de demonstração em Campanhas › Configurações gerais.')}},
   put(t,row){const r=this.all(t),i=r.findIndex(x=>x.id===row.id);if(i>=0)r[i]=row;else r.push(row);this.save(t,r);return row},
   del(t,id){this.save(t,this.all(t).filter(x=>x.id!==id))}};
-const pubRede=r=>({id:r.id,campId:r.campId,nome:r.nome,status:r.status,ativadaEm:r.ativadaEm,faixas:r.faixas||[],lojas:(r.lojas||[]).map(l=>({id:l.id,nome:l.nome,cnpj:l.cnpj,cidade:l.cidade}))});
+const pubRede=r=>({id:r.id,campId:r.campId,nome:r.nome,status:r.status,ativadaEm:r.ativadaEm,faixas:r.faixas||[],premiosSorteio:r.premiosSorteio||[],lojas:(r.lojas||[]).map(l=>({id:l.id,nome:l.nome,cnpj:l.cnpj,cidade:l.cidade}))});
 const DemoAPI={mode:'demo',
   async init(){if(!Demo.all('config').length)seedDemo()},
   async getConfig(){return Demo.all('config')[0]||{}},
@@ -152,6 +178,8 @@ const DemoAPI={mode:'demo',
   async adminLogin(nome,pin){const cfg=await this.getConfig();if(pin!==(cfg.pinDemo||'1234'))throw new Error('PIN incorreto');const a={nome:nome||'Equipe',email:''};sessionStorage.setItem('mp_admin',JSON.stringify(a));return a},
   async adminSession(){try{return JSON.parse(sessionStorage.getItem('mp_admin'))}catch(e){return null}},
   async adminLogout(){sessionStorage.removeItem('mp_admin')},
+  async numerosPublicos(c){const cl=Demo.all('clientes');return Demo.all('cupons').filter(x=>x.campId===c&&x.status==='aprovado').flatMap(x=>{const k=cl.find(z=>z.id===x.clienteId)||{};return(x.numeros||[]).map(n=>({redeId:x.redeId,n,nome:mascNome(k.nome),cpf:mascCPF(k.cpf)}))})},
+  async aprovarCupom(id,valor,por){const C=Demo.all('cupons'),cu=C.find(x=>x.id===id),ca=Demo.all('campanhas').find(x=>x.id===cu.campId);if(cu.status==='aprovado')throw new Error('Cupom já aprovado');Object.assign(cu,{status:'aprovado',valorAprovado:valor,motivo:'',analisadoPor:por,analisadoEm:iso()});cu.numeros=calcNumeros(cu,ca,C);return Demo.put('cupons',cu)},
   async list(t){return Demo.all(t)}, async put(t,r){return Demo.put(t,r)}, async del(t,id){Demo.del(t,id)}};
 
 // ---------- Armazenamento: modo online (Supabase) ----------
@@ -171,6 +199,8 @@ const SbAPI={mode:'online',
   async adminLogin(email,senha){this.ok(await this.c.auth.signInWithPassword({email,password:senha}));if(!this.ok(await this.c.rpc('mp_is_admin'))){await this.c.auth.signOut();throw new Error('Este usuário não está liberado como administrador.')}return{nome:email,email}},
   async adminSession(){const{data}=await this.c.auth.getSession();if(!data.session)return null;return this.ok(await this.c.rpc('mp_is_admin'))?{nome:data.session.user.email,email:data.session.user.email}:null},
   async adminLogout(){await this.c.auth.signOut()},
+  async numerosPublicos(c){return this.ok(await this.c.rpc('mp_numeros_publicos',{p_camp:c}))||[]},
+  async aprovarCupom(id,valor,por){return this.ok(await this.c.rpc('mp_aprovar',{p_id:id,p_valor:valor,p_por:por}))},
   async list(t){let out=[],f=0;for(;;){const d=this.ok(await this.c.from('mp_'+t).select('data').range(f,f+999));out=out.concat(d.map(r=>r.data));if(d.length<1000)break;f+=1000}return out},
   async put(t,row){this.ok(await this.c.from('mp_'+t).upsert({id:row.id,data:row}));return row},
   async del(t,id){this.ok(await this.c.from('mp_'+t).delete().eq('id',id))}};
@@ -181,54 +211,42 @@ const app=document.getElementById('app');
 
 // ---------- Dados de demonstração ----------
 function faixasExemplo(){return[{id:'f1',nome:'Bronze',min:150,premio:'Kit de produtos',custo:40,qtd:15},{id:'f2',nome:'Prata',min:300,premio:'Secador Baby Liss',custo:180,qtd:2},{id:'f3',nome:'Ouro',min:600,premio:'Máquina de cortar cabelo',custo:220,qtd:1},{id:'f4',nome:'Diamante',min:1000,premio:'Kit completo',custo:300,qtd:1}]}
+function premiosExemplo(){return[{id:'p1',premio:'Secador Baby Liss',custo:180,qtd:1},{id:'p2',premio:'Máquina de cortar cabelo',custo:220,qtd:1}]}
 function seedDemo(){const ini=hoje()<'2026-11-01'?hoje():'2026-11-01';
   const camp={id:'natal2026',nome:'Natal Premiado 2026',slogan:'Bateu a meta, ganhou presente de Natal!',marcas:[{nome:'Yelsew',cor:'#c1121f'},{nome:'Gomma',cor:'#e3148c'}],cor:'#c1121f',inicio:ini,fim:'2026-12-20',limiteEnvio:'2026-12-21',
     entregaInfo:'Os prêmios serão entregues a partir de 23/12, na loja onde a compra foi feita.',promotora:'[Razão social da promotora] — CNPJ [__.___.___/____-__]',exigirCpfNaNota:true,faixasPadrao:faixasExemplo(),
-    sorteio:{ativo:false,valorPorNumero:100,autorizacao:''},limites:{cuponsDia:3,valorAlto:800},status:'ativa',criadaEm:iso()};
+    formato:'faixas',premiosSorteioPadrao:premiosExemplo(),verbaPadrao:{tipo:'pct_extra',pct:10,valor:0},sorteio:{valorPorNumero:100,autorizacao:'',dataSorteio:'2026-12-23'},limites:{cuponsDia:3,valorAlto:800},status:'ativa',criadaEm:iso()};
   camp.regulamento=modeloRegulamento(camp);
   Demo.put('config',{id:'geral',appNome:'Meta Premiada',pinDemo:'1234'});
   Demo.put('campanhas',camp);
   Demo.put('redes',{id:'rede-demo',campId:camp.id,nome:'Rede Exemplo',status:'ativa',representante:'Roger',contato:'Comprador da rede',telefone:'',pedidoBase:20000,pedidoCampanha:35000,verbaPct:10,nfFaturamento:'000123',ativadaEm:ini,
-    lojas:[{id:'l1',nome:'Rede Exemplo — Centro',cnpj:'11222333000181',cidade:'São Paulo/SP'},{id:'l2',nome:'Rede Exemplo — Shopping',cnpj:'11444777000161',cidade:'São Paulo/SP'}],faixas:faixasExemplo(),funcionarios:[],obs:'Dados de demonstração',criadaEm:iso()});
-  Demo.put('redes',{id:'rede-neg',campId:camp.id,nome:'Rede em Negociação',status:'negociando',representante:'Roger',contato:'',telefone:'',pedidoBase:15000,pedidoCampanha:22000,verbaPct:10,nfFaturamento:'',ativadaEm:'',lojas:[],faixas:faixasExemplo(),funcionarios:[],obs:'',criadaEm:iso()})}
+    lojas:[{id:'l1',nome:'Rede Exemplo — Centro',cnpj:'11222333000181',cidade:'São Paulo/SP'},{id:'l2',nome:'Rede Exemplo — Shopping',cnpj:'11444777000161',cidade:'São Paulo/SP'}],faixas:faixasExemplo(),premiosSorteio:premiosExemplo(),verbaTipo:'pct_extra',funcionarios:[],obs:'Dados de demonstração',criadaEm:iso()});
+  Demo.put('redes',{id:'rede-neg',campId:camp.id,nome:'Rede em Negociação',status:'negociando',representante:'Roger',contato:'',telefone:'',pedidoBase:15000,pedidoCampanha:22000,verbaPct:10,nfFaturamento:'',ativadaEm:'',lojas:[],faixas:faixasExemplo(),premiosSorteio:premiosExemplo(),verbaTipo:'pct_extra',funcionarios:[],obs:'',criadaEm:iso()})}
 
-function modeloRegulamento(c){const m=(c.marcas||[]).map(x=>x.nome).join(' e ')||'[marcas]';const fx=ordF(c.faixasPadrao).map(f=>`   • ${f.nome}: a partir de ${brl(f.min)} — ${f.premio}`).join('\n');
-return `REGULAMENTO — ${c.nome}
+function modeloRegulamento(c){const m=(c.marcas||[]).map(x=>x.nome).join(' e ')||'[marcas]',v=brl(c.sorteio?.valorPorNumero);
+  const S=[['PROMOTORA',`${c.promotora||'[Razão social e CNPJ da promotora]'}, em parceria com as redes de lojas participantes listadas no aplicativo.`],
+  ['PERÍODO',`Compras realizadas de ${fd(c.inicio)} a ${fd(c.fim)}. Cadastro de cupons até ${fd(c.limiteEnvio)}. Para cada rede, valem as compras feitas a partir da data em que ela entrou na campanha, informada no aplicativo.`],
+  ['QUEM PODE PARTICIPAR','Pessoas físicas maiores de 18 anos, com CPF válido. Não podem participar funcionários das lojas participantes nem da promotora.'],
+  ['COMO PARTICIPAR',`a) Comprar produtos ${m} em uma loja participante${c.exigirCpfNaNota?', informando o CPF na nota':''};
+b) Cadastrar-se no aplicativo e enviar a foto do cupom fiscal, informando o valor gasto em produtos ${m};
+c) Os valores aprovados são somados por rede de lojas. Cada cupom só pode ser cadastrado uma vez.`]];
+  if(temFaixas(c))S.push(['FAIXAS E PRÊMIOS GARANTIDOS',`Ao atingir o valor de uma faixa, o participante garante o prêmio correspondente. Faixas de referência:
+${ordF(c.faixasPadrao).map(f=>`   • ${f.nome}: a partir de ${brl(f.min)} — ${f.premio}`).join('\n')}
+As faixas e quantidades de cada rede ficam publicadas no aplicativo e não mudam depois que a rede entra na campanha. Cada CPF recebe o prêmio da maior faixa atingida em cada rede. Os prêmios são limitados às quantidades informadas, por ordem de atingimento da faixa.`]);
+  if(temSorteio(c))S.push(['NÚMEROS DA SORTE E SORTEIO',`Promoção autorizada pela SPA/MF — Certificado de Autorização nº ${c.sorteio?.autorizacao||'[NÚMERO]'}.
+a) A cada ${v} aprovados em compras numa mesma rede, o participante recebe 1 número da sorte, sequencial, exibido no aplicativo.
+b) Encerrado o período e analisados todos os cupons, a lista de números é congelada e publicada no aplicativo (nome abreviado e CPF parcial), com código de verificação SHA-256.
+c) A apuração ocorrerá em ${c.sorteio?.dataSorteio?fd(c.sorteio.dataSorteio):'[DATA]'} com base no 1º prêmio da extração da Loteria Federal indicada no certificado. Em cada rede, os números são ordenados de forma crescente; o primeiro contemplado ocupa a posição dada pelo resto da divisão do 1º prêmio pelo total de números da rede, mais 1. Os demais prêmios vão para os números seguintes da lista, limitado a 1 prêmio por CPF em cada rede.
+d) Os prêmios sorteados de cada rede ficam publicados no aplicativo.
+(Ajustar este item à forma de apuração aprovada no certificado de autorização.)`]);
+  S.push(['VALIDAÇÃO DOS CUPONS',`Os cupons são conferidos pela equipe da promotora. Serão recusados cupons ilegíveis, de lojas não participantes, fora do período, ${c.exigirCpfNaNota?'sem o CPF do participante na nota, ':''}com valor divergente ou com indícios de fraude. Todas as análises ficam registradas.`],
+  ['ENTREGA DOS PRÊMIOS',c.entregaInfo||'[Como e onde os prêmios serão entregues]'],
+  ['DADOS PESSOAIS (LGPD)','Os dados são usados para operar a campanha, validar cupons e entregar prêmios. O envio de ofertas e novidades só ocorre para quem autorizar, e a autorização pode ser retirada a qualquer momento. O participante pode solicitar acesso, correção ou exclusão dos dados pelos canais da promotora.'],
+  ['DISPOSIÇÕES GERAIS','Dúvidas e casos omissos serão resolvidos pela promotora. Ao participar, o consumidor declara concordar com este regulamento.']);
+  return`REGULAMENTO — ${c.nome} (${FORMATOS[fmt(c)]})
 (MODELO — revisar com o jurídico antes de publicar)
 
-1. PROMOTORA
-${c.promotora||'[Razão social e CNPJ da promotora]'}, em parceria com as redes de lojas participantes listadas no aplicativo.
-
-2. PERÍODO
-Compras realizadas de ${fd(c.inicio)} a ${fd(c.fim)}. Cadastro de cupons até ${fd(c.limiteEnvio)}. Para cada rede, valem as compras feitas a partir da data em que ela entrou na campanha, informada no aplicativo.
-
-3. QUEM PODE PARTICIPAR
-Pessoas físicas maiores de 18 anos, com CPF válido. Não podem participar funcionários das lojas participantes nem da promotora.
-
-4. COMO PARTICIPAR
-a) Comprar produtos ${m} em uma loja participante${c.exigirCpfNaNota?', informando o CPF na nota':''};
-b) Cadastrar-se no aplicativo e enviar a foto do cupom fiscal, informando o valor gasto em produtos ${m};
-c) Os valores aprovados são somados por rede de lojas. Cada cupom só pode ser cadastrado uma vez.
-
-5. FAIXAS E PRÊMIOS
-Ao atingir o valor de uma faixa, o participante garante o prêmio correspondente${c.sorteio?.ativo?'':' (não há sorteio)'}. Faixas de referência:
-${fx}
-As faixas e quantidades de cada rede ficam publicadas no aplicativo e não mudam depois que a rede entra na campanha. Cada CPF recebe o prêmio da maior faixa atingida em cada rede. Os prêmios são limitados às quantidades informadas, por ordem de atingimento da faixa.
-
-6. VALIDAÇÃO DOS CUPONS
-Os cupons são conferidos pela equipe da promotora. Serão recusados cupons ilegíveis, de lojas não participantes, fora do período, ${c.exigirCpfNaNota?'sem o CPF do participante na nota, ':''}com valor divergente ou com indícios de fraude. Todas as análises ficam registradas.
-
-7. ENTREGA DOS PRÊMIOS
-${c.entregaInfo||'[Como e onde os prêmios serão entregues]'}
-
-8. DADOS PESSOAIS (LGPD)
-Os dados são usados para operar a campanha, validar cupons e entregar prêmios. O envio de ofertas e novidades só ocorre para quem autorizar, e a autorização pode ser retirada a qualquer momento. O participante pode solicitar acesso, correção ou exclusão dos dados pelos canais da promotora.
-${c.sorteio?.ativo?`
-9. NÚMEROS DA SORTE E SORTEIO
-A cada ${brl(c.sorteio.valorPorNumero)} aprovados, o participante recebe 1 número da sorte. Promoção autorizada pela SPA/MF — Certificado de Autorização nº ${c.sorteio.autorizacao||'[NÚMERO]'}. A apuração seguirá a extração da Loteria Federal informada no certificado.
-`:''}
-${c.sorteio?.ativo?'10':'9'}. DISPOSIÇÕES GERAIS
-Dúvidas e casos omissos serão resolvidos pela promotora. Ao participar, o consumidor declara concordar com este regulamento.`}
+`+S.map(([t,b],i)=>`${i+1}. ${t}\n${b}`).join('\n\n')}
 
 // ---------- Utilidades de tela ----------
 function toast(m){$$('.toast').forEach(x=>x.remove());const d=document.createElement('div');d.className='toast';d.textContent=m;document.body.appendChild(d);setTimeout(()=>d.remove(),3200)}
@@ -276,21 +294,33 @@ const Cli={
   marcas(){return(this.camp.marcas||[]).map(m=>m.nome).join(' e ')},
   hero(){const c=this.camp;return demoBar()+`<div class="hero"><div class="br">${esc((c.marcas||[]).map(m=>m.nome).join(' · '))}</div><h1>${esc(c.nome)}</h1><p>${esc(c.slogan||'')}</p><div class="per">Compras de ${fd(c.inicio)} a ${fd(c.fim)}</div></div>`},
   faixasHTML(faixas,total){const at=total!=null?faixaDe(total,faixas):null;return ordF(faixas).map(f=>`<div class="fx ${at&&at.id===f.id?'on':''}"><span><b>${esc(f.nome)}</b><br><span class="mu">a partir de ${brl(f.min)}</span></span><span style="text-align:right">${esc(f.premio)}</span></div>`).join('')},
-  landing(){const c=this.camp,r=this.redes.find(x=>x.id===this.redeLink);const fx=r?r.faixas:c.faixasPadrao;const fim=hoje()>c.limiteEnvio;
+  landing(){const c=this.camp,r=this.redes.find(x=>x.id===this.redeLink);const fx=r?r.faixas:c.faixasPadrao,ps=(r?r.premiosSorteio:c.premiosSorteioPadrao)||[];const fim=hoje()>c.limiteEnvio,v=brl(c.sorteio?.valorPorNumero);
+    const passo3=temFaixas(c)&&temSorteio(c)?`As compras somam. <b>Bateu a meta, ganhou o prêmio!</b> E cada ${v} vira 1 número da sorte.`:temSorteio(c)?`As compras somam: <b>cada ${v} vira 1 número da sorte</b> para o sorteio.`:'As compras somam. <b>Bateu a meta, ganhou o prêmio!</b>';
     app.innerHTML=this.hero()+`<div class="wrap">
     ${c.status!=='ativa'||fim?`<div class="warnb">Esta campanha está encerrada para novos cupons.</div>`:''}
     <div class="card"><h2>Como funciona</h2><div class="steps">
       <div class="step"><b class="n">1</b><div>Compre produtos <b>${esc(this.marcas())}</b> em uma loja participante${c.exigirCpfNaNota?' e <b>peça CPF na nota</b>':''}.</div></div>
       <div class="step"><b class="n">2</b><div>Cadastre-se e envie a <b>foto do cupom fiscal</b> aqui no app.</div></div>
-      <div class="step"><b class="n">3</b><div>As compras somam. <b>Bateu a meta, ganhou o prêmio!</b>${c.sorteio?.ativo?' E ainda recebe números da sorte.':''}</div></div></div></div>
-    <div class="card"><h2>Metas e prêmios${r?' — '+esc(r.nome):''}</h2>${this.faixasHTML(fx)}
-      ${!r&&this.redes.length?`<p class="mu" style="margin-top:8px">As metas podem variar por rede. Veja a da sua loja:</p><label class="f"><select id="selRede"><option value="">Escolha a rede</option>${this.redes.map(x=>`<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></label>`:''}
-      <p class="mu" style="margin-top:8px">Prêmios limitados às quantidades da campanha, por ordem de quem atingir a meta primeiro.</p></div>
+      <div class="step"><b class="n">3</b><div>${passo3}</div></div></div></div>
+    ${temFaixas(c)?`<div class="card"><h2>Metas e prêmios garantidos${r?' — '+esc(r.nome):''}</h2>${this.faixasHTML(fx)}<p class="mu" style="margin-top:8px">Prêmios limitados às quantidades da campanha, por ordem de quem atingir a meta primeiro.</p></div>`:''}
+    ${temSorteio(c)?`<div class="card"><h2>Sorteio${r?' — '+esc(r.nome):''}</h2><p>A cada <b>${v}</b> em compras, você ganha <b>1 número da sorte</b>. Quanto mais compra, mais chances.</p>${ps.length?`<h3>Prêmios sorteados</h3>${ps.map(p=>`<div class="fx"><span>${esc(p.premio)}</span><span>${Math.max(1,+p.qtd||1)}×</span></div>`).join('')}`:''}
+      <p class="mu" style="margin-top:8px">Sorteio${c.sorteio?.dataSorteio?' em '+fd(c.sorteio.dataSorteio):''} pela Loteria Federal${c.sorteio?.autorizacao?' · Certificado de Autorização SPA/MF nº '+esc(c.sorteio.autorizacao):''}.</p><p style="margin-top:8px"><a href="#" id="bNums">Ver lista pública de números e resultado</a></p></div>`:''}
+    ${!r&&this.redes.length?`<div class="card"><p class="mu">Os prêmios podem variar por rede. Veja os da sua loja:</p><label class="f"><select id="selRede"><option value="">Escolha a rede</option>${this.redes.map(x=>`<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></label></div>`:''}
     <div class="card"><button class="btn full" id="bCad">Quero participar</button><p style="margin-top:10px"><button class="btn sec full" id="bLog">Já tenho cadastro</button></p></div>
     ${this.redes.length?`<div class="card"><h2>Lojas participantes</h2>${this.redes.map(x=>`<p style="margin-bottom:6px"><b>${esc(x.nome)}</b><br><span class="mu">${(x.lojas||[]).map(l=>esc(l.nome+(l.cidade?' ('+l.cidade+')':''))).join(' · ')}</span></p>`).join('')}</div>`:''}
     <div class="foot"><a href="#" id="bReg">Regulamento</a> · <a href="#/admin">Área da equipe</a></div></div>`;
     $('#bCad').onclick=()=>this.cadastro();$('#bLog').onclick=()=>this.login();$('#bReg').onclick=e=>{e.preventDefault();this.regulamento()};
+    const bn=$('#bNums');if(bn)bn.onclick=e=>{e.preventDefault();this.numeros()};
     const sr=$('#selRede');if(sr)sr.onchange=()=>{if(sr.value){sessionStorage.setItem('mp_rede_'+c.id,sr.value);this.redeLink=sr.value;this.landing()}}},
+  async numeros(){const c=this.camp,redes=this.redes;const m=modal('<p class="mu">Carregando…</p>',true);let L=[];
+    try{L=await api.numerosPublicos(c.id)}catch(e){m.innerHTML='<button class="mx" data-close>×</button><div class="err">Não foi possível carregar a lista.</div>';return}
+    const cg=c.sorteio?.congelado;let conf='';if(cg){const h=await sha256(linhasLista(L));conf=h===cg.hash?'<div class="okb">✓ A lista abaixo é idêntica à que foi congelada antes do sorteio: o código de verificação confere.</div>':'<div class="err">Atenção: a lista atual é diferente da lista congelada.</div>'}
+    m.innerHTML=`<button class="mx" data-close>×</button><h2>Números da sorte — ${esc(c.nome)}</h2><p class="mu" style="margin:6px 0">Lista pública com nome abreviado e CPF parcial, para qualquer participante conferir.</p>
+      ${cg?`<p class="mu">Lista congelada em ${fdt(cg.em)} com ${cg.total} números. Código de verificação (SHA-256):<br><code style="word-break:break-all;font-size:12px">${esc(cg.hash)}</code></p>${conf}`:'<div class="warnb">A lista ainda está aberta: novos números entram conforme os cupons são aprovados.</div>'}
+      ${resultadoHTML(c,redes)}<label class="f" style="margin-top:10px">Procurar número ou parte do CPF<input id="qN" placeholder="ex: 000123 ou 982.247"></label><div id="lN"></div>`;
+    const draw=()=>{const q=$('#qN',m).value.trim(),F=L.filter(x=>!q||x.n.includes(q)||x.cpf.includes(q));
+      $('#lN',m).innerHTML=redes.map(r=>{const X=F.filter(x=>x.redeId===r.id).sort((a,b)=>a.n.localeCompare(b.n));return X.length?`<h3>${esc(r.nome)} (${X.length})</h3><div class="tbl"><table><tr><th>Número</th><th>Participante</th><th>CPF</th></tr>${X.slice(0,500).map(x=>`<tr><td>${esc(x.n)}</td><td>${esc(x.nome)}</td><td>${esc(x.cpf)}</td></tr>`).join('')}</table></div>${X.length>500?'<p class="mu">Use a busca para ver os demais.</p>':''}`:''}).join('')||'<p class="mu">Nenhum número distribuído ainda.</p>'};
+    $('#qN',m).oninput=draw;draw()},
   regulamento(){modal(`<h2 style="margin-bottom:10px">Regulamento</h2><pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.5">${esc(this.camp.regulamento||'')}</pre>`)},
   cadastro(){const c=this.camp;
     app.innerHTML=this.hero()+`<div class="wrap"><div class="card"><h2>Cadastro</h2><p class="mu" style="margin-bottom:12px">Leva 1 minuto. Seus dados valem para esta e para as próximas campanhas.</p>
@@ -321,7 +351,7 @@ const Cli={
       if(dig(v.cep).length!==8)er.push('CEP inválido.');
       if(!f.aceite.checked)er.push('É preciso aceitar o regulamento para participar.');
       if(er.length){$('#erC').innerHTML=`<div class="err">${er.map(esc).join('<br>')}</div>`;return}
-      const cli={id:uid(),nome:v.nome.trim(),cpf:dig(v.cpf),nascimento:v.nascimento,celular:dig(v.celular),email:v.email.trim().toLowerCase(),cep:dig(v.cep),endereco:v.endereco,numero:v.numero,bairro:v.bairro,cidade:v.cidade,uf:String(v.uf).toUpperCase(),
+      const cli={id:uid(),nome:v.nome.trim().replace(/\s+/g,' '),cpf:dig(v.cpf),nascimento:v.nascimento,celular:dig(v.celular),email:v.email.trim().toLowerCase(),cep:dig(v.cep),endereco:v.endereco,numero:v.numero,bairro:v.bairro,cidade:v.cidade,uf:String(v.uf).toUpperCase(),
         genero:v.genero,perfil:v.perfil,area:v.area||'',origem:v.origem,origemCamp:c.id,origemRede:this.redeLink||'',criadoEm:iso(),
         consentimentos:{regulamento:{aceito:true,em:iso(),campanha:c.id},marketing:{aceito:!!f.mkt.checked,em:iso(),canais:f.mkt.checked?['whatsapp','email','sms']:[]}}};
       try{await api.cadastrar(cli);localStorage.setItem('mp_sess',JSON.stringify({cpf:cli.cpf,nasc:cli.nascimento}));this.dados=await api.meusDados(cli.cpf,cli.nascimento);toast('Cadastro feito! Agora envie seu cupom.');this.area()}
@@ -335,23 +365,26 @@ const Cli={
       localStorage.setItem('mp_sess',JSON.stringify({cpf,nasc}));this.dados=d;this.area()}},
   sair(){localStorage.removeItem('mp_sess');this.dados=null;this.landing()},
   async recarregar(){const s=sess();this.dados=await api.meusDados(s.cpf,s.nasc);this.area()},
-  area(){const c=this.camp,{cliente,cupons}=this.dados;const meus=cupons.filter(x=>x.campId===c.id).sort((a,b)=>b.enviadoEm.localeCompare(a.enviadoEm));
+  area(){const c=this.camp,{cliente,cupons}=this.dados;const meus=cupons.filter(x=>x.campId===c.id).sort((a,b)=>b.enviadoEm.localeCompare(a.enviadoEm));const vpn=+c.sorteio?.valorPorNumero||0,res=c.sorteio?.resultados;
     const porRede={};for(const x of meus)(porRede[x.redeId]=porRede[x.redeId]||[]).push(x);
     const blocos=Object.entries(porRede).map(([rid,lst])=>{const r=this.redes.find(z=>z.id===rid);if(!r)return'';const tot=lst.reduce((s,x)=>s+aprov(x),0),pend=lst.filter(x=>x.status==='pendente').reduce((s,x)=>s+(+x.valor||0),0);
-      const at=faixaDe(tot,r.faixas),px=proxFaixa(tot,r.faixas),max=ordF(r.faixas).slice(-1)[0];const pct=max?Math.min(100,tot/max.min*100):0;
-      return`<div class="card"><div class="mu">${esc(r.nome)}</div><div class="big">${brl(tot)}</div><div class="bar"><i style="width:${pct}%"></i></div>
-      ${at?`<div class="okb">🎁 Você já garantiu a faixa <b>${esc(at.nome)}</b>: ${esc(at.premio)}</div>`:''}
-      ${px?`<p>Faltam <b>${brl(px.min-tot)}</b> para a faixa <b>${esc(px.nome)}</b> (${esc(px.premio)}).</p>`:'<p><b>Você atingiu a faixa máxima!</b></p>'}
-      ${pend?`<p class="mu">${brl(pend)} em análise.</p>`:''}<details style="margin-top:8px"><summary class="mu">Ver todas as faixas</summary>${this.faixasHTML(r.faixas,tot)}</details></div>`}).join('');
-    const nums=meus.flatMap(x=>x.numeros||[]);const encerrado=c.status!=='ativa'||hoje()>c.limiteEnvio;
+      let h=`<div class="card"><div class="mu">${esc(r.nome)}</div><div class="big">${brl(tot)}</div>`;
+      if(temFaixas(c)){const at=faixaDe(tot,r.faixas),px=proxFaixa(tot,r.faixas),max=ordF(r.faixas).slice(-1)[0];const pct=max?Math.min(100,tot/max.min*100):0;
+        h+=`<div class="bar"><i style="width:${pct}%"></i></div>${at?`<div class="okb">🎁 Você já garantiu a faixa <b>${esc(at.nome)}</b>: ${esc(at.premio)}</div>`:''}${px?`<p>Faltam <b>${brl(px.min-tot)}</b> para a faixa <b>${esc(px.nome)}</b> (${esc(px.premio)}).</p>`:'<p><b>Você atingiu a faixa máxima!</b></p>'}`}
+      if(temSorteio(c)){const nums=lst.flatMap(x=>x.numeros||[]),gan=(res?.redes?.[rid]?.ganhadores||[]).filter(g=>nums.includes(g.n));
+        h+=`<div style="margin-top:10px"><b>🍀 ${nums.length} número${nums.length===1?'':'s'} da sorte</b>${vpn&&!c.sorteio?.congelado?`<span class="mu"> · faltam ${brl(vpn-(tot%vpn))} para o próximo</span>`:''}<div style="margin-top:6px">${nums.map(n=>`<span class="chip" style="margin:2px">${esc(n)}</span>`).join('')}</div></div>
+        ${gan.length?`<div class="okb">🎉 Você foi sorteado(a)! ${gan.map(g=>`Número ${esc(g.n)}: <b>${esc(g.premio)}</b>`).join('<br>')}</div>`:''}`}
+      if(pend)h+=`<p class="mu">${brl(pend)} em análise.</p>`;
+      if(temFaixas(c))h+=`<details style="margin-top:8px"><summary class="mu">Ver todas as faixas</summary>${this.faixasHTML(r.faixas,tot)}</details>`;
+      return h+'</div>'}).join('');
+    const encerrado=c.status!=='ativa'||hoje()>c.limiteEnvio;
     app.innerHTML=this.hero()+`<div class="wrap">
     <div class="card"><p>Olá, <b>${esc(cliente.nome.split(' ')[0])}</b>!</p>${encerrado?'<div class="warnb">O envio de cupons está encerrado.</div>':`<p style="margin-top:10px"><button class="btn full" id="bEnv">📷 Enviar cupom fiscal</button></p>`}</div>
     ${blocos||`<div class="card"><p>Você ainda não enviou cupons nesta campanha.</p>${c.exigirCpfNaNota?'<p class="mu" style="margin-top:6px">Lembre-se: peça <b>CPF na nota</b> na hora da compra.</p>':''}</div>`}
-    ${c.sorteio?.ativo?`<div class="card"><h2>Seus números da sorte</h2>${nums.length?nums.map(n=>`<span class="chip" style="margin:3px">${esc(n)}</span>`).join(''):'<p class="mu">Os números aparecem quando seus cupons forem aprovados.</p>'}</div>`:''}
     ${meus.length?`<div class="card"><h2>Meus cupons</h2><div class="tbl"><table><tr><th>Data</th><th>Loja</th><th>Valor</th><th>Status</th></tr>${meus.map(x=>`<tr><td>${fd(x.dataCompra)}</td><td>${esc(x.lojaNome)}</td><td>${brl(x.status==='aprovado'?x.valorAprovado:x.valor)}</td><td><span class="chip ${x.status}">${STATUS_CUP[x.status]}</span>${x.status==='recusado'&&x.motivo?`<div class="mu">${esc(x.motivo)}</div>`:''}</td></tr>`).join('')}</table></div></div>`:''}
     <div class="card mu">${esc(c.entregaInfo||'')}</div>
-    <div class="foot"><a href="#" id="bReg">Regulamento</a> · <a href="#" id="bAtu">Atualizar</a> · <a href="#" id="bSair">Sair</a></div></div>`;
-    const be=$('#bEnv');if(be)be.onclick=()=>this.enviar();
+    <div class="foot"><a href="#" id="bReg">Regulamento</a>${temSorteio(c)?' · <a href="#" id="bNums">Números e resultado</a>':''} · <a href="#" id="bAtu">Atualizar</a> · <a href="#" id="bSair">Sair</a></div></div>`;
+    const be=$('#bEnv');if(be)be.onclick=()=>this.enviar();const bn=$('#bNums');if(bn)bn.onclick=e=>{e.preventDefault();this.numeros()};
     $('#bReg').onclick=e=>{e.preventDefault();this.regulamento()};$('#bSair').onclick=e=>{e.preventDefault();this.sair()};$('#bAtu').onclick=e=>{e.preventDefault();this.recarregar()}},
   acharLoja(cnpj){for(const r of this.redes)for(const l of r.lojas||[])if(dig(l.cnpj)===cnpj)return{rede:r,loja:l};return null},
   validar(env,dataCompra,valor){const c=this.camp,er=[],ch=env.ch,cli=this.dados.cliente,meus=this.dados.cupons;let alvo=null;
@@ -419,13 +452,15 @@ function cupomFake(loja,dt,vl,cpf,url,camp){const c=document.createElement('canv
 // ===================== MATERIAL DE PDV =====================
 const Pdv={async show(campId,redeId){const isAdm=await api.adminSession();const camp=(await api.campanhas()).find(c=>c.id===campId);
   let r=null;if(isAdm)r=(await api.list('redes')).find(x=>x.id===redeId);else r=(await api.redesPublicas(campId)).find(x=>x.id===redeId);
-  if(!camp){app.innerHTML='<div class="wrap">Campanha não encontrada.</div>';return}setTheme(camp);const fx=r?r.faixas:camp.faixasPadrao;const link=linkRede(camp.id,r?.id);const marcas=(camp.marcas||[]).map(m=>m.nome).join(' e ');
+  if(!camp){app.innerHTML='<div class="wrap">Campanha não encontrada.</div>';return}setTheme(camp);const fx=r?r.faixas:camp.faixasPadrao,ps=(r?r.premiosSorteio:camp.premiosSorteioPadrao)||[];const link=linkRede(camp.id,r?.id);const marcas=(camp.marcas||[]).map(m=>m.nome).join(' e '),v=brl(camp.sorteio?.valorPorNumero);
+  const chamada=temFaixas(camp)&&temSorteio(camp)?`Compre produtos <b>${esc(marcas)}</b>, bata a meta e <b>ganhe prêmios</b> — e ainda <b>concorra no sorteio</b>!`:temSorteio(camp)?`Compre produtos <b>${esc(marcas)}</b>: a cada <b>${v}</b> você ganha <b>1 número da sorte</b>!`:`Compre produtos <b>${esc(marcas)}</b>, junte os cupons e <b>ganhe prêmios</b>!`;
   app.innerHTML=`<div class="noprint wrap" style="text-align:center"><button class="btn" onclick="print()">Imprimir / salvar PDF</button> <button class="btn sec" onclick="history.back()">Voltar</button>${r&&r.status!=='ativa'?'<div class="warnb">Rede ainda não ativada — material para apresentação.</div>':''}</div>
   <div class="pdv"><div style="font-weight:800;letter-spacing:.12em;color:#555">${esc(marcas.toUpperCase())}</div><h1>${esc(camp.nome)}</h1><p style="font-size:20px">${esc(camp.slogan||'')}</p>
-  <p style="font-size:18px;margin-top:14px">Compre produtos <b>${esc(marcas)}</b>, junte os cupons e <b>ganhe prêmios</b>!</p>
-  <div class="fxp">${ordF(fx).map(f=>`<div><div style="font-weight:800;color:var(--pri)">${esc(f.nome)}</div><div style="font-size:13px">a partir de</div><div style="font-size:22px;font-weight:800">${brl(f.min)}</div><div style="margin-top:6px">${esc(f.premio)}</div></div>`).join('')}</div>
-  <div style="display:flex;gap:24px;align-items:center;justify-content:center;flex-wrap:wrap;text-align:left"><img src="${qrImg(link,7)}" style="width:210px"><div style="font-size:17px;line-height:1.7"><b>1.</b> ${camp.exigirCpfNaNota?'Peça <b>CPF na nota</b>':'Guarde o cupom fiscal'}<br><b>2.</b> Aponte a câmera para o QR Code<br><b>3.</b> Cadastre-se e envie a foto do cupom<br><b>4.</b> Bateu a meta, ganhou!</div></div>
-  <p style="margin-top:18px;font-size:14px">Compras de ${fd(r?.ativadaEm&&r.ativadaEm>camp.inicio?r.ativadaEm:camp.inicio)} a ${fd(camp.fim)}${r?' · '+esc(r.nome):''}. Prêmios limitados às quantidades da campanha. Regulamento completo no app.</p>
+  <p style="font-size:18px;margin-top:14px">${chamada}</p>
+  ${temFaixas(camp)?`<div class="fxp">${ordF(fx).map(f=>`<div><div style="font-weight:800;color:var(--pri)">${esc(f.nome)}</div><div style="font-size:13px">a partir de</div><div style="font-size:22px;font-weight:800">${brl(f.min)}</div><div style="margin-top:6px">${esc(f.premio)}</div></div>`).join('')}</div>`:''}
+  ${temSorteio(camp)?`<div style="border:2px dashed var(--pri);border-radius:12px;padding:14px;margin:14px 0;font-size:17px"><b>Sorteio${camp.sorteio?.dataSorteio?' em '+fd(camp.sorteio.dataSorteio):''}</b> · a cada ${v} em compras = 1 número da sorte${ps.length?`<br>Prêmios: ${ps.map(p=>esc((+p.qtd>1?p.qtd+'× ':'')+p.premio)).join(' · ')}`:''}</div>`:''}
+  <div style="display:flex;gap:24px;align-items:center;justify-content:center;flex-wrap:wrap;text-align:left"><img src="${qrImg(link,7)}" style="width:210px"><div style="font-size:17px;line-height:1.7"><b>1.</b> ${camp.exigirCpfNaNota?'Peça <b>CPF na nota</b>':'Guarde o cupom fiscal'}<br><b>2.</b> Aponte a câmera para o QR Code<br><b>3.</b> Cadastre-se e envie a foto do cupom<br><b>4.</b> ${temFaixas(camp)?'Bateu a meta, ganhou!':'Receba seus números da sorte!'}</div></div>
+  <p style="margin-top:18px;font-size:14px">Compras de ${fd(r?.ativadaEm&&r.ativadaEm>camp.inicio?r.ativadaEm:camp.inicio)} a ${fd(camp.fim)}${r?' · '+esc(r.nome):''}. ${temFaixas(camp)?'Prêmios limitados às quantidades da campanha. ':''}${temSorteio(camp)&&camp.sorteio?.autorizacao?'Certificado de Autorização SPA/MF nº '+esc(camp.sorteio.autorizacao)+'. ':''}Regulamento completo no app.</p>
   <p style="font-size:12px;color:#666;margin-top:6px;word-break:break-all">${esc(link)}</p></div>`}};
 
 // ===================== ÁREA DA EQUIPE =====================
@@ -456,7 +491,7 @@ const Adm={tab:'painel',
   // ----- PAINEL -----
   t_painel(el){const c=this.camp,R=this.d.redes.filter(r=>r.campId===c.id),C=this.d.cupons.filter(x=>x.campId===c.id);
     const comPedido=R.filter(r=>['fechado','faturado','ativa','encerrada'].includes(r.status));const extra=r=>Math.max(0,(+r.pedidoCampanha||0)-(+r.pedidoBase||0));
-    const totExtra=comPedido.reduce((s,r)=>s+extra(r),0),verba=comPedido.reduce((s,r)=>s+extra(r)*(+r.verbaPct||0)/100,0),custo=comPedido.reduce((s,r)=>s+custoPremios(r),0);
+    const totExtra=comPedido.reduce((s,r)=>s+extra(r),0),verba=comPedido.reduce((s,r)=>s+verbaDe(r),0),custo=comPedido.reduce((s,r)=>s+custoPremios(r,c),0);
     const ap=C.filter(x=>x.status==='aprovado'),sell=ap.reduce((s,x)=>s+aprov(x),0);const cliIds=new Set(C.map(x=>x.clienteId));this.d.clientes.filter(x=>x.origemCamp===c.id).forEach(x=>cliIds.add(x.id));
     const clis=this.d.clientes.filter(x=>cliIds.has(x.id)),opt=clis.filter(x=>x.consentimentos?.marketing?.aceito).length;
     const funil=Object.keys(STATUS_REDE).map(k=>[k,R.filter(r=>r.status===k).length]);
@@ -469,7 +504,8 @@ const Adm={tab:'painel',
       ${K('Verba de prêmios',brl(verba),`custo dos prêmios: ${brl(custo)}`)}
       ${K('Sell-out comprovado',brl(sell),`${ap.length} cupons aprovados`)}
       ${K('Clientes cadastrados',clis.length,`${clis.length?Math.round(opt/clis.length*100):0}% aceitam marketing`)}
-      ${K('Cupons para aprovar',C.filter(x=>x.status==='pendente').length,`${C.filter(x=>x.status==='recusado').length} recusados`)}</div>
+      ${K('Cupons para aprovar',C.filter(x=>x.status==='pendente').length,`${C.filter(x=>x.status==='recusado').length} recusados`)}
+      ${temSorteio(c)?K('Números da sorte',C.reduce((s,x)=>s+(x.numeros||[]).length,0),c.sorteio?.resultados?'sorteio apurado':c.sorteio?.congelado?'lista congelada':'distribuídos'):''}</div>
     <div class="card"><h2>Funil de negociação</h2><div class="grid">${funil.map(([k,n])=>`<div class="kpi"><div class="l"><span class="chip ${k}">${STATUS_REDE[k]}</span></div><div class="v">${n}</div></div>`).join('')}</div></div>
     <div class="card"><h2>Resultado por rede</h2><div class="tbl"><table><tr><th>Rede</th><th>Status</th><th>Pedido extra</th><th>Sell-out</th><th>Clientes</th><th>Faixas atingidas</th></tr>
     ${R.map(r=>{const cr=ap.filter(x=>x.redeId===r.id);const tot={};cr.forEach(x=>tot[x.clienteId]=(tot[x.clienteId]||0)+aprov(x));const fx={};Object.values(tot).forEach(v=>{const f=faixaDe(v,r.faixas);if(f)fx[f.nome]=(fx[f.nome]||0)+1});
@@ -484,47 +520,57 @@ const Adm={tab:'painel',
     ${R.map(r=>`<div class="card"><div class="row" style="align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(r.nome)}</h2><span class="chip ${r.status}">${STATUS_REDE[r.status]}</span> <span class="mu">${(r.lojas||[]).length} lojas · rep.: ${esc(r.representante||'—')}${r.ativadaEm?' · ativa desde '+fd(r.ativadaEm):''}</span></div>
       <div style="flex:0 0 auto;text-align:right"><div class="mu">Pedido extra</div><b>${brl(Math.max(0,(+r.pedidoCampanha||0)-(+r.pedidoBase||0)))}</b></div></div>
       <div class="row" style="margin-top:10px"><button class="btn sm sec" data-ed="${esc(r.id)}">Abrir / editar</button><button class="btn sm sec" data-pdv="${esc(r.id)}">Material de PDV</button><button class="btn sm sec" data-lk="${esc(r.id)}">Link e QR Code</button></div></div>`).join('')}`;
-    $('#bNova').onclick=()=>this.editRede({id:uid(),campId:c.id,nome:'',status:'negociando',representante:this.admin.nome,contato:'',telefone:'',pedidoBase:0,pedidoCampanha:0,verbaPct:10,nfFaturamento:'',ativadaEm:'',lojas:[],faixas:clone(c.faixasPadrao||[]).map(f=>({...f,id:uid()})),funcionarios:[],obs:'',criadaEm:iso()},true);
+    $('#bNova').onclick=()=>this.editRede({id:uid(),campId:c.id,nome:'',status:'negociando',representante:this.admin.nome,contato:'',telefone:'',pedidoBase:0,pedidoCampanha:0,verbaTipo:c.verbaPadrao?.tipo||'pct_extra',verbaPct:c.verbaPadrao?.pct??10,verbaValor:c.verbaPadrao?.valor||0,nfFaturamento:'',ativadaEm:'',lojas:[],faixas:clone(c.faixasPadrao||[]).map(f=>({...f,id:uid()})),premiosSorteio:clone(c.premiosSorteioPadrao||[]).map(p=>({...p,id:uid()})),funcionarios:[],obs:'',criadaEm:iso()},true);
     $$('[data-ed]').forEach(b=>b.onclick=()=>this.editRede(clone(this.d.redes.find(r=>r.id===b.dataset.ed))));
     $$('[data-pdv]').forEach(b=>b.onclick=()=>location.hash=`#/pdv/${c.id}/${b.dataset.pdv}`);
     $$('[data-lk]').forEach(b=>b.onclick=()=>{const r=this.d.redes.find(x=>x.id===b.dataset.lk),l=linkRede(c.id,r.id);modal(`<h2>Link da ${esc(r.nome)}</h2><p class="mu" style="margin:6px 0 12px">Use no material da loja, no WhatsApp e nas redes sociais. Quem se cadastra por este link fica marcado como vindo desta rede.</p><div style="text-align:center"><img src="${qrImg(l,6)}" style="width:220px"></div><label class="f">Link<input value="${esc(l)}" readonly onclick="this.select()"></label>${r.status!=='ativa'?'<div class="warnb">A rede ainda não está ativa: o link mostra a campanha, mas os cupons dessas lojas ainda não são aceitos.</div>':''}`)})},
-  editRede(r,nova){const trav=['ativa','encerrada'].includes(r.status)&&!nova;
+  editRede(r,nova){const c=this.camp,trav=['ativa','encerrada'].includes(r.status)&&!nova,dis=trav?'disabled':'';
+    const lock='<div class="warnb">🔒 Prêmios travados: a rede já está ativa e os clientes já veem estas regras. Isso garante a transparência da campanha.</div>';
     const lojaRow=l=>`<div class="erow lj" style="grid-template-columns:2fr 1.4fr 1.2fr 32px"><input name="ln" placeholder="Nome da loja" value="${esc(l.nome)}"><input name="lc" placeholder="CNPJ" value="${esc(fCNPJ(l.cnpj))}"><input name="lt" placeholder="Cidade/UF" value="${esc(l.cidade)}"><input type="hidden" name="li" value="${esc(l.id||uid())}"><button type="button" class="rmv">×</button></div>`;
-    const fxRow=f=>`<div class="erow fxr" style="grid-template-columns:1fr 1fr 2fr 1fr .8fr 32px"><input name="fn" placeholder="Faixa" value="${esc(f.nome)}" ${trav?'disabled':''}><input name="fm" placeholder="A partir de R$" inputmode="decimal" value="${esc(f.min)}" ${trav?'disabled':''}><input name="fp" placeholder="Prêmio" value="${esc(f.premio)}" ${trav?'disabled':''}><input name="fc" placeholder="Custo un. R$" inputmode="decimal" value="${esc(f.custo??'')}" ${trav?'disabled':''}><input name="fq" placeholder="Qtd" inputmode="numeric" value="${esc(f.qtd??'')}" ${trav?'disabled':''}><input type="hidden" name="fi" value="${esc(f.id||uid())}">${trav?'<span></span>':'<button type="button" class="rmv">×</button>'}</div>`;
-    const m=modal(`<h2>${nova?'Nova rede':esc(r.nome)}</h2><form id="fr" style="margin-top:12px">
+    const fxRow=f=>`<div class="erow fxr" style="grid-template-columns:1fr 1fr 2fr 1fr .8fr 32px"><input name="fn" placeholder="Faixa" value="${esc(f.nome)}" ${dis}><input name="fm" placeholder="A partir de R$" inputmode="decimal" value="${esc(f.min)}" ${dis}><input name="fp" placeholder="Prêmio" value="${esc(f.premio)}" ${dis}><input name="fc" placeholder="Custo un. R$" inputmode="decimal" value="${esc(f.custo??'')}" ${dis}><input name="fq" placeholder="Qtd" inputmode="numeric" value="${esc(f.qtd??'')}" ${dis}><input type="hidden" name="fi" value="${esc(f.id||uid())}">${trav?'<span></span>':'<button type="button" class="rmv">×</button>'}</div>`;
+    const psRow=p=>`<div class="erow psr" style="grid-template-columns:3fr 1fr .8fr 32px"><input name="pp" placeholder="Prêmio do sorteio" value="${esc(p.premio)}" ${dis}><input name="pc" placeholder="Custo un. R$" inputmode="decimal" value="${esc(p.custo??'')}" ${dis}><input name="pq" placeholder="Qtd" inputmode="numeric" value="${esc(p.qtd??1)}" ${dis}><input type="hidden" name="pi" value="${esc(p.id||uid())}">${trav?'<span></span>':'<button type="button" class="rmv">×</button>'}</div>`;
+    const m=modal(`<h2>${nova?'Nova rede':esc(r.nome)}</h2><p class="mu">Campanha ${esc(c.nome)} · formato <b>${FORMATOS[fmt(c)]}</b></p><form id="fr" style="margin-top:12px">
       <h3>Negociação</h3><div class="row"><label class="f">Nome da rede<input name="nome" value="${esc(r.nome)}" required></label><label class="f">Status<select name="status">${Object.entries(STATUS_REDE).map(([k,l])=>`<option value="${k}" ${r.status===k?'selected':''}>${l}</option>`).join('')}</select></label></div>
       <div class="row"><label class="f">Representante<input name="representante" value="${esc(r.representante)}"></label><label class="f">Contato na rede<input name="contato" value="${esc(r.contato)}"></label><label class="f">Telefone<input name="telefone" value="${esc(r.telefone)}"></label></div>
       <h3>Proposta — pedido maior × entrada na campanha</h3>
-      <div class="row"><label class="f">Pedido normal no período (R$)<input name="pedidoBase" inputmode="decimal" value="${esc(r.pedidoBase)}"></label><label class="f">Pedido com a campanha (R$)<input name="pedidoCampanha" inputmode="decimal" value="${esc(r.pedidoCampanha)}"></label><label class="f">Verba de prêmios (% do extra)<input name="verbaPct" inputmode="decimal" value="${esc(r.verbaPct)}"></label></div>
+      <div class="row"><label class="f">Pedido normal no período (R$)<input name="pedidoBase" inputmode="decimal" value="${esc(r.pedidoBase)}"></label><label class="f">Pedido com a campanha (R$)<input name="pedidoCampanha" inputmode="decimal" value="${esc(r.pedidoCampanha)}"></label></div>
+      <div class="row"><label class="f">Verba de prêmios definida por<select name="verbaTipo">${Object.entries(VERBA).map(([k,l])=>`<option value="${k}" ${(r.verbaTipo||'pct_extra')===k?'selected':''}>${l}</option>`).join('')}</select></label><label class="f" id="lPct">Percentual (%)<input name="verbaPct" inputmode="decimal" value="${esc(r.verbaPct??'')}"></label><label class="f" id="lVal">Valor da verba (R$)<input name="verbaValor" inputmode="decimal" value="${esc(r.verbaValor??'')}"></label></div>
       <div id="sim"></div>
       <div class="row"><label class="f">Nº da NF do pedido faturado<input name="nfFaturamento" value="${esc(r.nfFaturamento)}"></label><label class="f">Ativa na campanha desde<input name="ativadaEm" type="date" value="${esc(r.ativadaEm)}" ${r.ativadaEm&&trav?'disabled':''}></label></div>
       <h3>Lojas participantes (CNPJ de cada loja)</h3><div id="lojas">${(r.lojas||[]).map(lojaRow).join('')}</div><button type="button" class="btn sm sec" id="addL">+ Loja</button>
-      <h3>Faixas e prêmios desta rede</h3>${trav?'<div class="warnb">🔒 Faixas travadas: a rede já está ativa e os clientes já veem estas regras. Isso garante a transparência da campanha.</div>':''}
-      <div id="fxs">${(r.faixas||[]).map(fxRow).join('')}</div>${trav?'':'<button type="button" class="btn sm sec" id="addF">+ Faixa</button>'}
+      ${trav?lock:''}
+      ${temFaixas(c)?`<h3>Faixas e prêmios garantidos desta rede</h3><div id="fxs">${(r.faixas||[]).map(fxRow).join('')}</div>${trav?'':'<button type="button" class="btn sm sec" id="addF">+ Faixa</button>'}`:''}
+      ${temSorteio(c)?`<h3>Prêmios do sorteio desta rede</h3><p class="mu">Sorteados entre os números da sorte dos clientes desta rede. A ordem da lista é a ordem dos prêmios no sorteio.</p><div id="pss">${(r.premiosSorteio||[]).map(psRow).join('')}</div>${trav?'':'<button type="button" class="btn sm sec" id="addP">+ Prêmio</button>'}`:''}
       <h3>Funcionários da rede (não podem participar)</h3><label class="f">CPFs, um por linha<textarea name="funcionarios">${esc((r.funcionarios||[]).map(fCPF).join('\n'))}</textarea></label>
       <label class="f">Observações<textarea name="obs" style="min-height:60px">${esc(r.obs)}</textarea></label>
       <div id="erR"></div><div class="row"><button class="btn">Salvar</button>${nova?'':`<button type="button" class="btn bad" id="bDel" style="flex:0 0 auto">Excluir</button>`}</div></form>`,true);
     const f=$('#fr',m);
     const lerFx=()=>$$('.fxr',m).map(x=>({id:x.querySelector('[name=fi]').value,nome:x.querySelector('[name=fn]').value.trim(),min:num(x.querySelector('[name=fm]').value),premio:x.querySelector('[name=fp]').value.trim(),custo:num(x.querySelector('[name=fc]').value),qtd:Math.round(num(x.querySelector('[name=fq]').value))})).filter(x=>x.nome);
-    const sim=()=>{const b=num(f.pedidoBase.value),p=num(f.pedidoCampanha.value),pc=num(f.verbaPct.value),ex=Math.max(0,p-b),vb=ex*pc/100,cu=custoPremios({faixas:lerFx()});
-      $('#sim',m).innerHTML=`<div class="${cu>vb+0.01?'warnb':'okb'}">Pedido extra: <b>${brl(ex)}</b> (${b?Math.round(ex/b*100):0}% acima do normal) · Verba de prêmios: <b>${brl(vb)}</b> · Custo dos prêmios das faixas: <b>${brl(cu)}</b>${cu>vb+0.01?' — <b>acima da verba</b>: reduza quantidades ou peça um pedido maior.':' — dentro da verba.'}</div>`};
-    f.addEventListener('input',sim);sim();
+    const lerPs=()=>$$('.psr',m).map(x=>({id:x.querySelector('[name=pi]').value,premio:x.querySelector('[name=pp]').value.trim(),custo:num(x.querySelector('[name=pc]').value),qtd:Math.max(1,Math.round(num(x.querySelector('[name=pq]').value)))})).filter(x=>x.premio);
+    const sim=()=>{const t=f.verbaTipo.value;$('#lPct',m).style.display=t==='fixo'?'none':'block';$('#lVal',m).style.display=t==='fixo'?'block':'none';
+      const b=num(f.pedidoBase.value),p=num(f.pedidoCampanha.value),ex=Math.max(0,p-b),vb=verbaDe({pedidoBase:b,pedidoCampanha:p,verbaTipo:t,verbaPct:num(f.verbaPct.value),verbaValor:num(f.verbaValor.value)}),cu=custoPremios({faixas:temFaixas(c)?lerFx():[],premiosSorteio:temSorteio(c)?lerPs():[]},c);
+      $('#sim',m).innerHTML=`<div class="${cu>vb+0.01?'warnb':'okb'}">Pedido extra: <b>${brl(ex)}</b> (${b?Math.round(ex/b*100):0}% acima do normal) · Verba de prêmios: <b>${brl(vb)}</b>${p&&t!=='pct_total'?` (${(vb/p*100).toFixed(1).replace('.',',')}% do pedido)`:''} · Custo dos prêmios: <b>${brl(cu)}</b>${cu>vb+0.01?' — <b>acima da verba</b>: reduza quantidades ou peça um pedido maior.':' — dentro da verba.'}</div>`};
+    f.addEventListener('input',sim);f.verbaTipo.onchange=sim;sim();
     m.addEventListener('click',e=>{if(e.target.classList.contains('rmv')){e.target.parentElement.remove();sim()}});
     $('#addL',m).onclick=()=>$('#lojas',m).insertAdjacentHTML('beforeend',lojaRow({nome:'',cnpj:'',cidade:''}));
     const af=$('#addF',m);if(af)af.onclick=()=>$('#fxs',m).insertAdjacentHTML('beforeend',fxRow({nome:'',min:'',premio:''}));
+    const ap=$('#addP',m);if(ap)ap.onclick=()=>$('#pss',m).insertAdjacentHTML('beforeend',psRow({premio:'',qtd:1}));
     const bd=$('#bDel',m);if(bd)bd.onclick=async()=>{if(this.d.cupons.some(x=>x.redeId===r.id)){toast('Esta rede já tem cupons. Mude o status para Encerrada em vez de excluir.');return}if(!confirm('Excluir esta rede?'))return;await api.del('redes',r.id);this.d.redes=this.d.redes.filter(x=>x.id!==r.id);await this.log('rede_excluida',r.nome,'');closeModal();this.render()};
     f.onsubmit=async e=>{e.preventDefault();const er=[];const antes=clone(r);
       const lojas=$$('.lj',m).map(x=>({id:x.querySelector('[name=li]').value,nome:x.querySelector('[name=ln]').value.trim(),cnpj:dig(x.querySelector('[name=lc]').value),cidade:x.querySelector('[name=lt]').value.trim()})).filter(l=>l.nome||l.cnpj);
       lojas.forEach(l=>{if(!cnpjOk(l.cnpj))er.push(`CNPJ inválido: ${l.nome||l.cnpj}`)});
       const outras=this.d.redes.filter(x=>x.campId===r.campId&&x.id!==r.id).flatMap(x=>(x.lojas||[]).map(l=>({...l,rede:x.nome})));
       lojas.forEach(l=>{const o=outras.find(z=>z.cnpj===l.cnpj);if(o)er.push(`CNPJ ${fCNPJ(l.cnpj)} já está na rede ${o.rede}.`)});
-      Object.assign(r,{nome:f.nome.value.trim(),status:f.status.value,representante:f.representante.value,contato:f.contato.value,telefone:f.telefone.value,pedidoBase:num(f.pedidoBase.value),pedidoCampanha:num(f.pedidoCampanha.value),verbaPct:num(f.verbaPct.value),nfFaturamento:f.nfFaturamento.value.trim(),lojas,funcionarios:f.funcionarios.value.split(/\n|,|;/).map(dig).filter(x=>x.length===11),obs:f.obs.value});
-      if(!trav)r.faixas=lerFx();if(!f.ativadaEm.disabled)r.ativadaEm=f.ativadaEm.value;
-      if(r.status==='ativa'){if(!r.nfFaturamento)er.push('Para ativar a rede, informe o número da NF do pedido faturado.');if(!lojas.length)er.push('Para ativar, cadastre ao menos uma loja com CNPJ.');if(!r.faixas.length)er.push('Para ativar, defina as faixas e prêmios.');if(!r.ativadaEm)r.ativadaEm=hoje()}
+      Object.assign(r,{nome:f.nome.value.trim(),status:f.status.value,representante:f.representante.value,contato:f.contato.value,telefone:f.telefone.value,pedidoBase:num(f.pedidoBase.value),pedidoCampanha:num(f.pedidoCampanha.value),verbaTipo:f.verbaTipo.value,verbaPct:num(f.verbaPct.value),verbaValor:num(f.verbaValor.value),nfFaturamento:f.nfFaturamento.value.trim(),lojas,funcionarios:f.funcionarios.value.split(/\n|,|;/).map(dig).filter(x=>x.length===11),obs:f.obs.value});
+      if(!trav){if(temFaixas(c))r.faixas=lerFx();if(temSorteio(c))r.premiosSorteio=lerPs()}if(!f.ativadaEm.disabled)r.ativadaEm=f.ativadaEm.value;
+      if(r.status==='ativa'){if(!r.nfFaturamento)er.push('Para ativar a rede, informe o número da NF do pedido faturado.');if(!lojas.length)er.push('Para ativar, cadastre ao menos uma loja com CNPJ.');
+        if(temFaixas(c)&&!(r.faixas||[]).length)er.push('Para ativar, defina as faixas e prêmios.');if(temSorteio(c)&&!(r.premiosSorteio||[]).length)er.push('Para ativar, defina os prêmios do sorteio.');if(!r.ativadaEm)r.ativadaEm=hoje()}
       if(!r.nome)er.push('Informe o nome da rede.');
-      if(er.length){Object.assign(r,antes);$('#erR',m).innerHTML=`<div class="err">${er.map(esc).join('<br>')}</div>`;return}
+      if(er.length){Object.keys(r).forEach(k=>delete r[k]);Object.assign(r,antes);$('#erR',m).innerHTML=`<div class="err">${er.map(esc).join('<br>')}</div>`;return}
       await this.save('redes',r);
-      const mud=[];if(antes.status!==r.status)mud.push(`status: ${STATUS_REDE[antes.status]||'-'} → ${STATUS_REDE[r.status]}`);if(antes.pedidoCampanha!==r.pedidoCampanha)mud.push(`pedido campanha: ${brl(antes.pedidoCampanha)} → ${brl(r.pedidoCampanha)}`);if(JSON.stringify(antes.faixas)!==JSON.stringify(r.faixas))mud.push('faixas alteradas');if((antes.lojas||[]).length!==lojas.length)mud.push(`lojas: ${(antes.lojas||[]).length} → ${lojas.length}`);
+      const mud=[];if(antes.status!==r.status)mud.push(`status: ${STATUS_REDE[antes.status]||'-'} → ${STATUS_REDE[r.status]}`);if(antes.pedidoCampanha!==r.pedidoCampanha)mud.push(`pedido campanha: ${brl(antes.pedidoCampanha)} → ${brl(r.pedidoCampanha)}`);
+      if(brl(verbaDe(antes))!==brl(verbaDe(r)))mud.push(`verba: ${brl(verbaDe(antes))} → ${brl(verbaDe(r))} (${VERBA[r.verbaTipo]})`);
+      if(JSON.stringify(antes.faixas)!==JSON.stringify(r.faixas))mud.push('faixas alteradas');if(JSON.stringify(antes.premiosSorteio||[])!==JSON.stringify(r.premiosSorteio||[]))mud.push('prêmios do sorteio alterados');if((antes.lojas||[]).length!==lojas.length)mud.push(`lojas: ${(antes.lojas||[]).length} → ${lojas.length}`);
       await this.log(nova?'rede_criada':'rede_editada',r.nome,mud.join('; '));closeModal();toast('Rede salva');this.render()}},
 
   // ----- APROVAÇÃO -----
@@ -552,35 +598,63 @@ const Adm={tab:'painel',
     $$('[data-cup]',el).forEach(card=>{const x=this.d.cupons.find(z=>z.id===card.dataset.cup);
       card.querySelector('[data-ap]').onclick=async()=>{const v=num(card.querySelector('.va').value);if(!(v>0)){toast('Informe o valor aprovado');return}await this.decidir(x,'aprovado',v,'');this.render()};
       card.querySelector('[data-rc]').onclick=async()=>{await this.decidir(x,'recusado',0,card.querySelector('.mo').value);this.render()}})},
-  async decidir(x,st,v,motivo){const c=this.camp;x.status=st;x.valorAprovado=v;x.motivo=motivo;x.analisadoPor=this.admin.nome;x.analisadoEm=iso();
-    if(st==='aprovado'&&c.sorteio?.ativo&&c.sorteio.valorPorNumero>0){const meus=this.d.cupons.filter(z=>z.campId===c.id&&z.clienteId===x.clienteId&&z.status==='aprovado');
-      const tot=meus.reduce((s,z)=>s+aprov(z),0),tem=meus.reduce((s,z)=>s+(z.id===x.id?0:(z.numeros||[]).length),0),novos=Math.floor(tot/c.sorteio.valorPorNumero)-tem;
-      let seq=Math.max(0,...this.d.cupons.filter(z=>z.campId===c.id).flatMap(z=>(z.numeros||[]).map(Number)));x.numeros=Array.from({length:Math.max(0,novos)},()=>String(++seq).padStart(6,'0'))}
-    await this.save('cupons',x);const cli=this.d.clientes.find(z=>z.id===x.clienteId);
+  async decidir(x,st,v,motivo){const c=this.camp;
+    if(st==='aprovado')Object.assign(x,await api.aprovarCupom(x.id,v,this.admin.nome));
+    else{Object.assign(x,{status:'recusado',valorAprovado:0,motivo,numeros:[],analisadoPor:this.admin.nome,analisadoEm:iso()});await this.save('cupons',x)}
+    const cli=this.d.clientes.find(z=>z.id===x.clienteId);
     await this.log(st==='aprovado'?'cupom_aprovado':'cupom_recusado',`${cli?.nome||''} · cupom ${x.numero} · ${x.lojaNome}`,st==='aprovado'?`${brl(v)}${Math.abs(v-x.valor)>0.009?' (declarado '+brl(x.valor)+')':''}${x.numeros?.length?' · números '+x.numeros.join(', '):''}`:motivo);
-    toast(st==='aprovado'?'Cupom aprovado':'Cupom recusado')},
+    toast(st==='aprovado'?(temSorteio(c)&&c.sorteio?.congelado?'Aprovado. A lista de números já está congelada: este cupom não gera números.':'Cupom aprovado'+(x.numeros?.length?` · ${x.numeros.length} número(s) da sorte`:'')):'Cupom recusado')},
 
   // ----- PRÊMIOS -----
   ranking(r){const ap=this.d.cupons.filter(x=>x.redeId===r.id&&x.status==='aprovado').sort((a,b)=>a.enviadoEm.localeCompare(b.enviadoEm));const acc={},quando={};
     for(const x of ap){const a=acc[x.clienteId]=(acc[x.clienteId]||0)+aprov(x);const f=faixaDe(a,r.faixas);if(f)quando[x.clienteId]={f,em:x.enviadoEm}}
     const out=[];for(const f of ordF(r.faixas)){const l=Object.entries(quando).filter(([,q])=>q.f.id===f.id).sort((a,b)=>a[1].em.localeCompare(b[1].em));l.forEach(([cid,q],i)=>out.push({cid,total:acc[cid],f,em:q.em,pos:i+1,dentro:!f.qtd||i<f.qtd}))}return out},
+  numerosAdmin(c){const out=[];this.d.cupons.filter(x=>x.campId===c.id&&x.status==='aprovado').forEach(x=>{const k=this.d.clientes.find(z=>z.id===x.clienteId)||{};(x.numeros||[]).forEach(n=>out.push({redeId:x.redeId,n,nome:mascNome(k.nome),cpf:mascCPF(k.cpf),key:x.clienteId}))});return out},
+  htmlSorteio(c,R){const s=c.sorteio||{},L=this.numerosAdmin(c),res=s.resultados,pend=this.d.cupons.filter(x=>x.campId===c.id&&x.status==='pendente').length;
+    return`<div class="card"><h2>Sorteio</h2><p class="mu">1 número a cada ${brl(s.valorPorNumero)} aprovados, por rede. ${s.autorizacao?'Certificado SPA/MF nº '+esc(s.autorizacao):'<b style="color:var(--bad)">Sem nº de autorização SPA/MF cadastrado na campanha.</b>'}</p>
+    <div class="grid" style="margin:10px 0">${R.map(r=>{const X=L.filter(x=>x.redeId===r.id);return`<div class="kpi"><div class="l">${esc(r.nome)}</div><div class="v">${X.length}</div><div class="mu">números · ${new Set(X.map(x=>x.key)).size} participantes · ${expandePremios(r.premiosSorteio).length} prêmios</div></div>`}).join('')||'<p class="mu">Nenhuma rede ativa.</p>'}</div>
+    <h3>Passo 1 — Congelar a lista de números</h3>
+    ${s.congelado?`<div class="okb">Lista congelada em ${fdt(s.congelado.em)} por ${esc(s.congelado.por)} · ${s.congelado.total} números<br><span style="font-size:12px;word-break:break-all">Código SHA-256: ${esc(s.congelado.hash)}</span></div>`:`<p class="mu">Depois do prazo de envio e com todos os cupons analisados, congele a lista. Ela fica pública no app com um código de verificação (SHA-256), e a partir daí nenhum número novo é gerado.</p>${pend?`<div class="warnb">Ainda há ${pend} cupom(ns) para analisar.</div>`:''}<button class="btn" id="bCong">Congelar lista de números</button>`}
+    <h3>Passo 2 — Apurar pela Loteria Federal</h3>
+    ${res?resultadoHTML(c,R)+this.entregasSorteioHTML(c,R):s.congelado?`<p class="mu">Regra: em cada rede, os números ficam em ordem crescente. O primeiro ganhador é o número na posição (resto da divisão do 1º prêmio da Loteria Federal pelo total de números da rede) + 1. Os demais prêmios vão para os números seguintes, pulando quem já ganhou (1 prêmio por CPF). <b>Confirme que esta é a regra do regulamento autorizado.</b></p>
+      <div class="row"><label class="f">Concurso da Loteria Federal<input id="lfC" inputmode="numeric"></label><label class="f">Data da extração<input id="lfD" type="date"></label><label class="f">1º prêmio (número sorteado)<input id="lfN" inputmode="numeric" maxlength="7"></label></div><button class="btn" id="bApu">Apurar sorteio</button>`:'<p class="mu">Congele a lista primeiro.</p>'}</div>`},
+  entregasSorteioHTML(c,R){const res=c.sorteio.resultados;
+    return`<h3>Entregas do sorteio</h3><div class="tbl"><table><tr><th>Rede</th><th>Prêmio</th><th>Número</th><th>Ganhador</th><th></th></tr>${Object.entries(res.redes||{}).flatMap(([rid,x])=>x.ganhadores.map(g=>{const cu=this.d.cupons.find(z=>z.campId===c.id&&(z.numeros||[]).includes(g.n)),cli=this.d.clientes.find(z=>z.id===cu?.clienteId)||{},e=this.d.premios.find(p=>p.tipo==='sorteio'&&p.campId===c.id&&p.numero===g.n),r=R.find(z=>z.id===rid);
+      return`<tr><td>${esc(r?.nome||rid)}</td><td>${esc(g.premio)}</td><td>${esc(g.n)}</td><td>${esc(cli.nome)}<div class="mu">${fCPF(cli.cpf)} · ${fTel(cli.celular)}</div></td><td>${e?`<span class="chip entregue">Entregue ${fd(e.entregueEm)}</span><div class="mu">${esc(e.local)}</div>`:`<button class="btn sm" data-ents="${esc(rid)}|${esc(g.n)}">Entregar</button>`}</td></tr>`})).join('')}</table></div>`},
+  bindSorteio(el,c,R){const bc=$('#bCong',el);if(bc)bc.onclick=async()=>{const L=this.numerosAdmin(c);if(!confirm(`Congelar a lista com ${L.length} números? Depois disso nenhum número novo será gerado.`))return;
+      const hash=await sha256(linhasLista(L));c.sorteio={...c.sorteio,congelado:{em:iso(),hash,total:L.length,por:this.admin.nome}};await this.save('campanhas',c);await this.log('sorteio_lista_congelada',c.nome,`${L.length} números · SHA-256 ${hash}`);this.render()};
+    const ba=$('#bApu',el);if(ba)ba.onclick=async()=>{const conc=$('#lfC',el).value.trim(),dt=$('#lfD',el).value,base=dig($('#lfN',el).value);
+      if(!conc||!dt||base.length<5){toast('Preencha concurso, data e o 1º prêmio (5 ou 6 dígitos).');return}
+      if(!confirm(`Apurar com o 1º prêmio ${base} (concurso ${conc})? O resultado fica público e não pode ser refeito.`))return;
+      const L=this.numerosAdmin(c),redes={};
+      for(const r of R){const pool=L.filter(x=>x.redeId===r.id),pr=expandePremios(r.premiosSorteio);if(!pool.length||!pr.length)continue;const{pos,ganh}=apurar(pool,base,pr.length);redes[r.id]={total:pool.length,pos,ganhadores:ganh.map((g,i)=>({premio:pr[i],n:g.n,nome:g.nome,cpf:g.cpf}))}}
+      c.sorteio={...c.sorteio,resultados:{extracao:conc,dataExtracao:dt,base,em:iso(),por:this.admin.nome,redes}};await this.save('campanhas',c);
+      await this.log('sorteio_apurado',c.nome,`Loteria Federal ${conc} · 1º prêmio ${base} · `+Object.entries(redes).map(([rid,x])=>`${(R.find(z=>z.id===rid)||{}).nome}: ${x.ganhadores.map(g=>g.n).join(', ')}`).join(' | '));this.render()};
+    $$('[data-ents]',el).forEach(b=>b.onclick=()=>{const[rid,n]=b.dataset.ents.split('|');const r=this.d.redes.find(z=>z.id===rid),cu=this.d.cupons.find(z=>z.campId===c.id&&(z.numeros||[]).includes(n)),cli=this.d.clientes.find(z=>z.id===cu?.clienteId)||{},g=c.sorteio.resultados.redes[rid].ganhadores.find(z=>z.n===n);
+      const m=modal(`<h2>Registrar entrega — sorteio</h2><p style="margin:8px 0">${esc(cli.nome)} — CPF ${fCPF(cli.cpf)}<br>Número <b>${esc(n)}</b>: <b>${esc(g.premio)}</b></p>
+      <label class="f">Local da entrega<select id="eLoc">${(r.lojas||[]).map(l=>`<option>${esc(l.nome)}</option>`).join('')}<option>Envio pelos Correios</option></select></label>
+      <label class="ck"><input type="checkbox" id="eDoc"><span>Conferi o documento com foto do ganhador (CPF ${fCPF(cli.cpf)}).</span></label><button class="btn full" id="eOk">Confirmar entrega</button>`);
+      $('#eOk',m).onclick=async()=>{if(!$('#eDoc',m).checked){toast('Confirme a conferência do documento');return}const p={id:uid(),tipo:'sorteio',campId:c.id,redeId:rid,clienteId:cli.id,numero:n,premio:g.premio,faixaNome:'Sorteio',local:$('#eLoc',m).value,entregueEm:iso(),por:this.admin.nome};
+        await this.save('premios',p);await this.log('premio_entregue',`${cli.nome} · ${r.nome}`,`Sorteio nº ${n}: ${g.premio} · ${p.local}`);closeModal();this.render()}})},
   t_premios(el){const c=this.camp,R=this.d.redes.filter(r=>r.campId===c.id&&['ativa','encerrada'].includes(r.status));const encerrou=hoje()>c.fim;
-    el.innerHTML=`<div class="card"><h2>Prêmios por rede</h2><p class="mu">Cada CPF ganha o prêmio da maior faixa atingida em cada rede. Quando há mais ganhadores do que prêmios, vale a ordem de quem atingiu a faixa primeiro (data e hora do envio do cupom). ${encerrou?'':'<b>A campanha ainda está em andamento: a faixa final de cada cliente pode subir até o fim.</b>'}</p></div>
-    ${R.map(r=>{const rk=this.ranking(r);const E=this.d.premios.filter(p=>p.redeId===r.id);
+    const fxHTML=!temFaixas(c)?'':`<div class="card"><h2>Prêmios garantidos por faixa</h2><p class="mu">Cada CPF ganha o prêmio da maior faixa atingida em cada rede. Quando há mais ganhadores do que prêmios, vale a ordem de quem atingiu a faixa primeiro (data e hora do envio do cupom). ${encerrou?'':'<b>A campanha ainda está em andamento: a faixa final de cada cliente pode subir até o fim.</b>'}</p></div>
+    ${R.map(r=>{const rk=this.ranking(r);const E=this.d.premios.filter(p=>p.redeId===r.id&&p.tipo!=='sorteio');
       return`<div class="card"><h2>${esc(r.nome)}</h2><div class="grid" style="margin-bottom:10px">${ordF(r.faixas).map(f=>{const g=rk.filter(x=>x.f.id===f.id).length,e=E.filter(p=>p.faixaId===f.id).length;return`<div class="kpi"><div class="l">${esc(f.nome)} · ${esc(f.premio)}</div><div class="v">${g}/${f.qtd||'∞'}</div><div class="mu">${e} entregues${f.qtd&&g>f.qtd?` · <b style="color:var(--bad)">${g-f.qtd} além do estoque</b>`:''}</div></div>`}).join('')}</div>
-      <div class="tbl"><table><tr><th>#</th><th>Cliente</th><th>Total</th><th>Faixa</th><th>Situação</th><th></th></tr>${rk.slice().reverse().map(x=>{const cli=this.d.clientes.find(z=>z.id===x.cid)||{};const e=E.find(p=>p.clienteId===x.cid);
+      <div class="tbl"><table><tr><th>Ordem na faixa</th><th>Cliente</th><th>Total</th><th>Faixa</th><th>Situação</th><th></th></tr>${rk.slice().reverse().map(x=>{const cli=this.d.clientes.find(z=>z.id===x.cid)||{};const e=E.find(p=>p.clienteId===x.cid);
         return`<tr><td>${x.pos}</td><td>${esc(cli.nome)}<div class="mu">${fCPF(cli.cpf)} · ${fTel(cli.celular)}</div></td><td>${brl(x.total)}</td><td>${esc(x.f.nome)}<div class="mu">${esc(x.f.premio)}</div></td>
         <td>${e?`<span class="chip entregue">Entregue ${fd(e.entregueEm)}</span><div class="mu">${esc(e.faixaNome)} · ${esc(e.local)}</div>`:x.dentro?'<span class="chip aprovado">Garantido</span>':'<span class="chip pendente">Além do estoque</span>'}</td>
-        <td>${e?'':`<button class="btn sm" data-ent="${esc(r.id)}|${esc(x.cid)}|${esc(x.f.id)}" ${x.dentro?'':'disabled'}>Entregar</button>`}</td></tr>`}).join('')||'<tr><td colspan="6" class="mu">Ninguém atingiu faixa ainda.</td></tr>'}</table></div></div>`}).join('')||'<div class="card mu">Nenhuma rede ativa.</div>'}
-    <div class="card"><button class="btn sec" id="bExpP">Exportar lista de ganhadores (CSV)</button></div>`;
+        <td>${e?'':`<button class="btn sm" data-ent="${esc(r.id)}|${esc(x.cid)}|${esc(x.f.id)}" ${x.dentro?'':'disabled'}>Entregar</button>`}</td></tr>`}).join('')||'<tr><td colspan="6" class="mu">Ninguém atingiu faixa ainda.</td></tr>'}</table></div></div>`}).join('')||'<div class="card mu">Nenhuma rede ativa.</div>'}`;
+    el.innerHTML=fxHTML+(temSorteio(c)?this.htmlSorteio(c,R):'')+`<div class="card"><button class="btn sec" id="bExpP">Exportar lista de ganhadores (CSV)</button></div>`;
     $$('[data-ent]',el).forEach(b=>b.onclick=()=>{const[rid,cid,fid]=b.dataset.ent.split('|');const r=this.d.redes.find(z=>z.id===rid),f=r.faixas.find(z=>z.id===fid),cli=this.d.clientes.find(z=>z.id===cid);
       const m=modal(`<h2>Registrar entrega</h2><p style="margin:8px 0">${esc(cli.nome)} — CPF ${fCPF(cli.cpf)}<br><b>${esc(f.nome)}: ${esc(f.premio)}</b></p>${encerrou?'':'<div class="warnb">A campanha ainda não terminou. Se o cliente subir de faixa depois, a diferença terá de ser tratada à parte.</div>'}
       <label class="f">Local da entrega<select id="eLoc">${(r.lojas||[]).map(l=>`<option>${esc(l.nome)}</option>`).join('')}<option>Envio pelos Correios</option></select></label>
       <label class="ck"><input type="checkbox" id="eDoc"><span>Conferi o documento com foto do ganhador (CPF ${fCPF(cli.cpf)}).</span></label><button class="btn full" id="eOk">Confirmar entrega</button>`);
       $('#eOk',m).onclick=async()=>{if(!$('#eDoc',m).checked){toast('Confirme a conferência do documento');return}const p={id:uid(),campId:c.id,redeId:rid,clienteId:cid,faixaId:fid,faixaNome:f.nome,premio:f.premio,local:$('#eLoc',m).value,entregueEm:iso(),por:this.admin.nome};
         await this.save('premios',p);await this.log('premio_entregue',`${cli.nome} · ${r.nome}`,`${f.nome}: ${f.premio} · ${p.local}`);closeModal();this.render()}});
+    if(temSorteio(c))this.bindSorteio(el,c,R);
     $('#bExpP').onclick=async()=>{const L=[['Rede','Posição','Cliente','CPF','Celular','E-mail','Total aprovado','Faixa','Prêmio','Situação','Entregue em','Local']];
-      R.forEach(r=>this.ranking(r).forEach(x=>{const cli=this.d.clientes.find(z=>z.id===x.cid)||{},e=this.d.premios.find(p=>p.redeId===r.id&&p.clienteId===x.cid);L.push([r.nome,x.pos,cli.nome,fCPF(cli.cpf),fTel(cli.celular),cli.email,x.total.toFixed(2).replace('.',','),x.f.nome,x.f.premio,e?'Entregue':x.dentro?'Garantido':'Além do estoque',e?fd(e.entregueEm):'',e?.local||''])}));
+      if(temFaixas(c))R.forEach(r=>this.ranking(r).forEach(x=>{const cli=this.d.clientes.find(z=>z.id===x.cid)||{},e=this.d.premios.find(p=>p.redeId===r.id&&p.clienteId===x.cid&&p.tipo!=='sorteio');L.push([r.nome,x.pos,cli.nome,fCPF(cli.cpf),fTel(cli.celular),cli.email,x.total.toFixed(2).replace('.',','),x.f.nome,x.f.premio,e?'Entregue':x.dentro?'Garantido':'Além do estoque',e?fd(e.entregueEm):'',e?.local||''])}));
+      Object.entries(c.sorteio?.resultados?.redes||{}).forEach(([rid,x])=>x.ganhadores.forEach((g,i)=>{const r=R.find(z=>z.id===rid)||{},cu=this.d.cupons.find(z=>z.campId===c.id&&(z.numeros||[]).includes(g.n)),cli=this.d.clientes.find(z=>z.id===cu?.clienteId)||{},e=this.d.premios.find(p=>p.tipo==='sorteio'&&p.campId===c.id&&p.numero===g.n);L.push([r.nome,'Sorteio '+(i+1)+'º · nº '+g.n,cli.nome,fCPF(cli.cpf),fTel(cli.celular),cli.email,'','Sorteio',g.premio,e?'Entregue':'Sorteado',e?fd(e.entregueEm):'',e?.local||''])}));
       csv(`ganhadores-${c.id}.csv`,L);await this.log('export_ganhadores',c.nome,`${L.length-1} linhas`)}},
 
   // ----- CLIENTES / CRM -----
@@ -604,23 +678,27 @@ const Adm={tab:'painel',
 
   // ----- CAMPANHAS -----
   t_campanhas(el){const L=this.d.campanhas;
-    el.innerHTML=`<div class="card"><div class="row" style="align-items:center"><h2 style="margin:0">Campanhas</h2><div style="flex:0 0 auto"><button class="btn" id="bNC">+ Nova campanha</button></div></div><p class="mu" style="margin-top:6px">Crie quantas campanhas quiser, com as marcas que quiser. A base de clientes é a mesma para todas.</p></div>
-    ${L.map(c=>`<div class="card"><div class="row"><div><h2 style="margin-bottom:4px">${esc(c.nome)}</h2><span class="chip ${c.status==='ativa'?'ativa':c.status==='encerrada'?'encerrada':''}">${esc(c.status)}</span> <span class="mu">${esc((c.marcas||[]).map(m=>m.nome).join(', '))} · ${fd(c.inicio)} a ${fd(c.fim)}${c.sorteio?.ativo?' · com sorteio':''}</span></div></div>
+    el.innerHTML=`<div class="card"><div class="row" style="align-items:center"><h2 style="margin:0">Campanhas</h2><div style="flex:0 0 auto"><button class="btn" id="bNC">+ Nova campanha</button></div></div><p class="mu" style="margin-top:6px">Crie quantas campanhas quiser, com as marcas e o formato que cada uma escolher. A base de clientes é a mesma para todas.</p></div>
+    ${L.map(c=>`<div class="card"><div class="row"><div><h2 style="margin-bottom:4px">${esc(c.nome)}</h2><span class="chip ${c.status==='ativa'?'ativa':c.status==='encerrada'?'encerrada':''}">${esc(c.status)}</span> <span class="chip fechado">${FORMATOS[fmt(c)]}</span> <span class="mu">${esc((c.marcas||[]).map(m=>m.nome).join(', '))} · ${fd(c.inicio)} a ${fd(c.fim)}</span></div></div>
       <div class="row" style="margin-top:10px"><button class="btn sm sec" data-ec="${esc(c.id)}">Editar</button><button class="btn sm sec" data-dc="${esc(c.id)}">Duplicar</button><a class="btn sm sec" href="#/c/${esc(c.id)}" target="_blank">Ver app do cliente</a><a class="btn sm sec" href="#/pdv/${esc(c.id)}">Material geral</a></div></div>`).join('')}
     <div class="card"><h2>Configurações gerais</h2><form id="fg"><div class="row"><label class="f">Nome do app<input name="appNome" value="${esc(S.cfg.appNome||'Meta Premiada')}"></label>${api.mode==='demo'?`<label class="f">PIN da equipe<input name="pinDemo" value="${esc(S.cfg.pinDemo||'1234')}"></label>`:''}</div><button class="btn sm">Salvar</button></form>
     <p class="mu" style="margin-top:12px">Modo atual: <b>${api.mode==='demo'?'Demonstração (dados só neste aparelho)':'Online (Supabase)'}</b></p>
     ${api.mode==='demo'?'<p style="margin-top:8px"><button class="btn sm bad" id="bReset">Apagar dados de demonstração</button></p>':''}</div>`;
-    const novo=()=>({id:'',nome:'',slogan:'',marcas:[{nome:'',cor:'#c1121f'}],cor:'#c1121f',inicio:hoje(),fim:'',limiteEnvio:'',entregaInfo:'',promotora:'',exigirCpfNaNota:true,faixasPadrao:faixasExemplo(),sorteio:{ativo:false,valorPorNumero:100,autorizacao:''},limites:{cuponsDia:3,valorAlto:800},status:'rascunho',regulamento:''});
+    const novo=()=>({id:'',nome:'',slogan:'',formato:'faixas',marcas:[{nome:'',cor:'#c1121f'}],cor:'#c1121f',inicio:hoje(),fim:'',limiteEnvio:'',entregaInfo:'',promotora:'',exigirCpfNaNota:true,faixasPadrao:faixasExemplo(),premiosSorteioPadrao:premiosExemplo(),verbaPadrao:{tipo:'pct_extra',pct:10,valor:0},
+      sorteio:{valorPorNumero:100,autorizacao:'',dataSorteio:''},limites:{cuponsDia:3,valorAlto:800},status:'rascunho',regulamento:''});
     $('#bNC').onclick=()=>this.editCamp(novo(),true);
     $$('[data-ec]').forEach(b=>b.onclick=()=>this.editCamp(clone(L.find(c=>c.id===b.dataset.ec))));
-    $$('[data-dc]').forEach(b=>b.onclick=()=>{const c=clone(L.find(x=>x.id===b.dataset.dc));Object.assign(c,{id:'',nome:c.nome+' (cópia)',status:'rascunho'});this.editCamp(c,true)});
+    $$('[data-dc]').forEach(b=>b.onclick=()=>{const c=clone(L.find(x=>x.id===b.dataset.dc));Object.assign(c,{id:'',nome:c.nome+' (cópia)',status:'rascunho',criadaEm:''});if(c.sorteio){delete c.sorteio.congelado;delete c.sorteio.resultados}this.editCamp(c,true)});
     $('#fg').onsubmit=async e=>{e.preventDefault();const f=e.target;S.cfg={...S.cfg,id:'geral',appNome:f.appNome.value.trim()||'Meta Premiada',...(f.pinDemo?{pinDemo:f.pinDemo.value.trim()||'1234'}:{})};await api.put('config',S.cfg);await this.log('config',S.cfg.appNome,'');toast('Salvo');this.render()};
     const br=$('#bReset');if(br)br.onclick=()=>{if(!confirm('Apagar TODOS os dados de demonstração deste aparelho e recomeçar com o exemplo?'))return;Object.keys(localStorage).filter(k=>k.startsWith('mp_demo_')||k==='mp_sess').forEach(k=>localStorage.removeItem(k));seedDemo();location.reload()}},
-  editCamp(c,nova){const temCup=!nova&&this.d.cupons.some(x=>x.campId===c.id);
+  editCamp(c,nova){const temCup=!nova&&this.d.cupons.some(x=>x.campId===c.id),cong=!!c.sorteio?.congelado,vp=c.verbaPadrao||{tipo:'pct_extra',pct:10,valor:0};
     const mRow=m=>`<div class="erow mr" style="grid-template-columns:2fr 60px 32px"><input name="mn" placeholder="Marca" value="${esc(m.nome)}"><input name="mc" type="color" value="${esc(m.cor||'#c1121f')}" style="padding:2px;height:36px"><button type="button" class="rmv">×</button></div>`;
     const fRow=f=>`<div class="erow fxr" style="grid-template-columns:1fr 1fr 2fr 1fr .8fr 32px"><input name="fn" placeholder="Faixa" value="${esc(f.nome)}"><input name="fm" placeholder="A partir de R$" value="${esc(f.min)}"><input name="fp" placeholder="Prêmio" value="${esc(f.premio)}"><input name="fc" placeholder="Custo un." value="${esc(f.custo??'')}"><input name="fq" placeholder="Qtd" value="${esc(f.qtd??'')}"><button type="button" class="rmv">×</button></div>`;
+    const pRow=p=>`<div class="erow psr" style="grid-template-columns:3fr 1fr .8fr 32px"><input name="pp" placeholder="Prêmio do sorteio" value="${esc(p.premio)}"><input name="pc" placeholder="Custo un." value="${esc(p.custo??'')}"><input name="pq" placeholder="Qtd" value="${esc(p.qtd??1)}"><button type="button" class="rmv">×</button></div>`;
     const m=modal(`<h2>${nova?'Nova campanha':esc(c.nome)}</h2><form id="fcp" style="margin-top:12px">
-    <div class="row"><label class="f">Nome da campanha<input name="nome" value="${esc(c.nome)}" required></label><label class="f">Código (aparece no link)<input name="id" value="${esc(c.id)}" ${nova?'':'disabled'} placeholder="ex: maes2027"></label></div>
+    <h3>Formato da campanha</h3><div class="grid">${Object.keys(FORMATOS).map(k=>`<label class="kpi" style="cursor:pointer;display:flex;gap:10px;align-items:flex-start"><input type="radio" name="formato" value="${k}" ${fmt(c)===k?'checked':''} ${temCup?'disabled':''} style="margin-top:4px;width:18px;height:18px"><span><b>${FORMATOS[k]}</b><br><span class="mu">${FORMATO_DESC[k]}</span></span></label>`).join('')}</div>
+    ${temCup?'<p class="mu" style="margin-top:6px">O formato não pode mudar depois que a campanha recebeu cupons.</p>':''}
+    <div class="row" style="margin-top:12px"><label class="f">Nome da campanha<input name="nome" value="${esc(c.nome)}" required></label><label class="f">Código (aparece no link)<input name="id" value="${esc(c.id)}" ${nova?'':'disabled'} placeholder="ex: maes2027"></label></div>
     <label class="f">Frase de chamada<input name="slogan" value="${esc(c.slogan)}"></label>
     <h3>Marcas</h3><div id="mrs">${(c.marcas||[]).map(mRow).join('')}</div><button type="button" class="btn sm sec" id="addM">+ Marca</button>
     <div class="row" style="margin-top:12px"><label class="f">Cor principal<input name="cor" type="color" value="${esc(c.cor||'#c1121f')}" style="height:42px;padding:3px"></label><label class="f">Status<select name="status">${['rascunho','ativa','encerrada'].map(s=>`<option ${c.status===s?'selected':''}>${s}</option>`).join('')}</select></label></div>
@@ -629,31 +707,39 @@ const Adm={tab:'painel',
     <label class="f">Como os prêmios serão entregues<input name="entregaInfo" value="${esc(c.entregaInfo)}"></label>
     <label class="ck"><input type="checkbox" name="exigirCpfNaNota" ${c.exigirCpfNaNota?'checked':''}><span>Exigir CPF na nota (recomendado: é o principal controle contra fraude)</span></label>
     <div class="row"><label class="f">Máx. cupons por cliente por dia<input name="cuponsDia" inputmode="numeric" value="${esc(c.limites?.cuponsDia)}"></label><label class="f">Alertar cupons acima de (R$)<input name="valorAlto" inputmode="decimal" value="${esc(c.limites?.valorAlto)}"></label></div>
-    <h3>Faixas padrão (cada rede recebe uma cópia e pode ajustar na negociação)</h3><div id="fxs">${(c.faixasPadrao||[]).map(fRow).join('')}</div><button type="button" class="btn sm sec" id="addF">+ Faixa</button>
-    <h3>Números da sorte / sorteio</h3><div class="warnb">Sorteio para consumidor exige <b>autorização prévia da SPA/Ministério da Fazenda</b>, pedida com antecedência. Só ative com o certificado de autorização em mãos.</div>
-    <label class="ck"><input type="checkbox" name="sAtivo" ${c.sorteio?.ativo?'checked':''}><span>Dar números da sorte</span></label>
-    <div class="row"><label class="f">1 número a cada (R$)<input name="sValor" value="${esc(c.sorteio?.valorPorNumero)}"></label><label class="f">Nº do certificado de autorização<input name="sAut" value="${esc(c.sorteio?.autorizacao)}"></label></div>
+    <h3>Verba de prêmios padrão (cada rede pode ajustar na negociação)</h3>
+    <div class="row"><label class="f">A marca define a verba por<select name="vTipo">${Object.entries(VERBA).map(([k,l])=>`<option value="${k}" ${vp.tipo===k?'selected':''}>${l}</option>`).join('')}</select></label><label class="f" id="lvP">Percentual (%)<input name="vPct" inputmode="decimal" value="${esc(vp.pct??'')}"></label><label class="f" id="lvV">Valor fixo por rede (R$)<input name="vVal" inputmode="decimal" value="${esc(vp.valor??'')}"></label></div>
+    <div id="secFx"><h3>Faixas padrão (cada rede recebe uma cópia e pode ajustar)</h3><div id="fxs">${(c.faixasPadrao||[]).map(fRow).join('')}</div><button type="button" class="btn sm sec" id="addF">+ Faixa</button></div>
+    <div id="secSo"><h3>Sorteio</h3><div class="warnb">Sorteio para consumidor exige <b>autorização prévia da SPA/Ministério da Fazenda</b>, pedida com antecedência. A campanha só pode ser ativada com o nº do certificado.</div>
+      <div class="row"><label class="f">1 número da sorte a cada (R$)<input name="sValor" inputmode="decimal" value="${esc(c.sorteio?.valorPorNumero)}" ${cong?'disabled':''}></label><label class="f">Nº do certificado de autorização<input name="sAut" value="${esc(c.sorteio?.autorizacao)}"></label><label class="f">Data do sorteio<input name="sData" type="date" value="${esc(c.sorteio?.dataSorteio)}"></label></div>
+      <p class="mu">Prêmios padrão do sorteio (cada rede recebe uma cópia e pode ajustar):</p><div id="pss">${(c.premiosSorteioPadrao||[]).map(pRow).join('')}</div><button type="button" class="btn sm sec" id="addP">+ Prêmio</button></div>
     <h3>Regulamento</h3><button type="button" class="btn sm sec" id="gReg">Gerar modelo com os dados acima</button><label class="f" style="margin-top:8px"><textarea name="regulamento" style="min-height:220px">${esc(c.regulamento)}</textarea></label>
     ${temCup?'<div class="warnb">Esta campanha já tem cupons. Mudanças em datas e regulamento ficam registradas na auditoria.</div>':''}
     <div id="erP"></div><button class="btn full">Salvar campanha</button></form>`,true);
     const f=$('#fcp',m);m.addEventListener('click',e=>{if(e.target.classList.contains('rmv'))e.target.parentElement.remove()});
-    $('#addM',m).onclick=()=>$('#mrs',m).insertAdjacentHTML('beforeend',mRow({nome:'',cor:'#333333'}));$('#addF',m).onclick=()=>$('#fxs',m).insertAdjacentHTML('beforeend',fRow({nome:'',min:'',premio:''}));
-    const ler=()=>{const o=clone(c);Object.assign(o,{nome:f.nome.value.trim(),slogan:f.slogan.value.trim(),cor:f.cor.value,status:f.status.value,inicio:f.inicio.value,fim:f.fim.value,limiteEnvio:f.limiteEnvio.value,promotora:f.promotora.value.trim(),entregaInfo:f.entregaInfo.value.trim(),exigirCpfNaNota:f.exigirCpfNaNota.checked,
+    const fmtSel=()=>(f.querySelector('[name=formato]:checked')||{}).value||fmt(c);
+    const vis=()=>{const k=fmtSel();$('#secFx',m).style.display=k!=='sorteio'?'block':'none';$('#secSo',m).style.display=k!=='faixas'?'block':'none';const t=f.vTipo.value;$('#lvP',m).style.display=t==='fixo'?'none':'block';$('#lvV',m).style.display=t==='fixo'?'block':'none'};
+    $$('[name=formato]',m).forEach(x=>x.onchange=vis);f.vTipo.onchange=vis;vis();
+    $('#addM',m).onclick=()=>$('#mrs',m).insertAdjacentHTML('beforeend',mRow({nome:'',cor:'#333333'}));$('#addF',m).onclick=()=>$('#fxs',m).insertAdjacentHTML('beforeend',fRow({nome:'',min:'',premio:''}));$('#addP',m).onclick=()=>$('#pss',m).insertAdjacentHTML('beforeend',pRow({premio:'',qtd:1}));
+    const ler=()=>{const o=clone(c);Object.assign(o,{formato:fmtSel(),nome:f.nome.value.trim(),slogan:f.slogan.value.trim(),cor:f.cor.value,status:f.status.value,inicio:f.inicio.value,fim:f.fim.value,limiteEnvio:f.limiteEnvio.value,promotora:f.promotora.value.trim(),entregaInfo:f.entregaInfo.value.trim(),exigirCpfNaNota:f.exigirCpfNaNota.checked,
       marcas:$$('.mr',m).map(x=>({nome:x.querySelector('[name=mn]').value.trim(),cor:x.querySelector('[name=mc]').value})).filter(x=>x.nome),
       faixasPadrao:$$('.fxr',m).map(x=>({id:uid(),nome:x.querySelector('[name=fn]').value.trim(),min:num(x.querySelector('[name=fm]').value),premio:x.querySelector('[name=fp]').value.trim(),custo:num(x.querySelector('[name=fc]').value),qtd:Math.round(num(x.querySelector('[name=fq]').value))})).filter(x=>x.nome),
-      limites:{cuponsDia:Math.round(num(f.cuponsDia.value)),valorAlto:num(f.valorAlto.value)},sorteio:{ativo:f.sAtivo.checked,valorPorNumero:num(f.sValor.value),autorizacao:f.sAut.value.trim()},regulamento:f.regulamento.value});
-      if(nova)o.id=f.id.value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9-]/g,'');return o};
+      premiosSorteioPadrao:$$('.psr',m).map(x=>({id:uid(),premio:x.querySelector('[name=pp]').value.trim(),custo:num(x.querySelector('[name=pc]').value),qtd:Math.max(1,Math.round(num(x.querySelector('[name=pq]').value)))})).filter(x=>x.premio),
+      verbaPadrao:{tipo:f.vTipo.value,pct:num(f.vPct.value),valor:num(f.vVal.value)},
+      limites:{cuponsDia:Math.round(num(f.cuponsDia.value)),valorAlto:num(f.valorAlto.value)},sorteio:{...(c.sorteio||{}),valorPorNumero:cong?c.sorteio.valorPorNumero:num(f.sValor.value),autorizacao:f.sAut.value.trim(),dataSorteio:f.sData.value},regulamento:f.regulamento.value});
+      delete o.sorteio.ativo;if(nova)o.id=f.id.value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9-]/g,'');return o};
     $('#gReg',m).onclick=()=>{if(f.regulamento.value.trim()&&!confirm('Substituir o texto atual do regulamento pelo modelo?'))return;f.regulamento.value=modeloRegulamento(ler())};
     f.onsubmit=async e=>{e.preventDefault();const o=ler(),er=[];
       if(!o.id)er.push('Informe o código da campanha (letras e números).');if(nova&&this.d.campanhas.some(x=>x.id===o.id))er.push('Já existe uma campanha com este código.');
-      if(!o.marcas.length)er.push('Informe ao menos uma marca.');if(!o.faixasPadrao.length)er.push('Informe ao menos uma faixa.');
+      if(!o.marcas.length)er.push('Informe ao menos uma marca.');if(temFaixas(o)&&!o.faixasPadrao.length)er.push('Informe ao menos uma faixa.');
+      if(temSorteio(o)&&!(o.sorteio.valorPorNumero>0))er.push('Informe o valor de compra para cada número da sorte.');
       if(o.fim<o.inicio)er.push('A data final é anterior à inicial.');if(o.limiteEnvio<o.fim)er.push('O prazo de envio deve ser igual ou posterior ao fim das compras.');
-      if(o.sorteio.ativo&&!o.sorteio.autorizacao)er.push('Para ativar números da sorte, informe o nº do certificado de autorização da SPA/MF.');
-      if(o.sorteio.ativo&&!(o.sorteio.valorPorNumero>0))er.push('Informe o valor por número da sorte.');
+      if(o.status==='ativa'&&temSorteio(o)&&!o.sorteio.autorizacao&&api.mode!=='demo')er.push('Para ativar uma campanha com sorteio, informe o nº do certificado de autorização da SPA/MF.');
       if(o.status==='ativa'&&!o.regulamento.trim())er.push('Para ativar, preencha o regulamento.');
       if(er.length){$('#erP',m).innerHTML=`<div class="err">${er.map(esc).join('<br>')}</div>`;return}
-      if(!o.criadaEm)o.criadaEm=iso();await this.save('campanhas',o);await this.log(nova?'campanha_criada':'campanha_editada',o.nome,`${fd(o.inicio)} a ${fd(o.fim)} · ${o.status}${o.sorteio.ativo?' · sorteio':''}`);
-      this.campId=o.id;closeModal();toast('Campanha salva');this.render()}},
+      if(!o.criadaEm)o.criadaEm=iso();await this.save('campanhas',o);await this.log(nova?'campanha_criada':'campanha_editada',o.nome,`${FORMATOS[fmt(o)]} · ${fd(o.inicio)} a ${fd(o.fim)} · ${o.status}${fmt(c)!==fmt(o)&&!nova?' · formato alterado de '+FORMATOS[fmt(c)]:''}`);
+      if(o.status==='ativa'&&temSorteio(o)&&!o.sorteio.autorizacao)toast('Atenção: sorteio sem nº de autorização (permitido só na demonstração).');else toast('Campanha salva');
+      this.campId=o.id;closeModal();this.render()}},
 
   // ----- AUDITORIA -----
   t_audit(el){const A=this.d.audit.filter(a=>!a.campId||a.campId===this.campId).sort((a,b)=>b.em.localeCompare(a.em));
@@ -661,7 +747,6 @@ const Adm={tab:'painel',
     <div class="card tbl"><table><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Sobre</th><th>Detalhe</th></tr>${A.slice(0,500).map(a=>`<tr><td>${fdt(a.em)}</td><td>${esc(a.por)}</td><td>${esc(a.acao.replace(/_/g,' '))}</td><td>${esc(a.alvo)}</td><td class="mu">${esc(a.det)}</td></tr>`).join('')||'<tr><td colspan="5" class="mu">Sem registros.</td></tr>'}</table></div>`;
     $('#bEA').onclick=()=>csv(`auditoria-${this.campId}.csv`,[['Quando','Quem','Ação','Sobre','Detalhe'],...A.map(a=>[fdt(a.em),a.por,a.acao,a.alvo,a.det])])}
 };
-function custoPremios(r){return(r.faixas||[]).reduce((s,f)=>s+(+f.custo||0)*(+f.qtd||0),0)}
 
 (async()=>{try{await api.init();S.cfg=await api.getConfig()||{};document.title=S.cfg.appNome||'Meta Premiada'}catch(e){app.innerHTML=`<div class="wrap"><div class="err">Não foi possível conectar: ${esc(e.message)}</div></div>`;return}
   window.addEventListener('hashchange',route);route()})();

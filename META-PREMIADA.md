@@ -10,13 +10,27 @@ Um único arquivo (`meta-premiada.html`) com três partes:
 
 Serve para qualquer campanha e qualquer marca: nome, marcas, cores, datas, faixas e prêmios são configurados na aba **Campanhas**.
 
+## Formatos de campanha (a marca escolhe)
+
+| Formato | Como funciona | Autorização SPA/MF |
+|---|---|---|
+| **Compre e Ganhe** | Bateu a meta (faixa de compra), ganhou o prêmio garantido | Não precisa de autorização de sorteio |
+| **Compre e Concorra** | A cada R$ X aprovados, 1 número da sorte; prêmios sorteados pela Loteria Federal | Obrigatória e prévia |
+| **Ganhe + Concorra** | Faixas garantidas e também números da sorte | Obrigatória e prévia |
+
+O formato fica travado depois que a campanha recebe o primeiro cupom.
+
+## Verba de prêmios: percentual ou valor
+
+A marca define a verba de prêmios de cada rede de três formas: **% do pedido extra**, **% do pedido total** ou **valor fixo (R$)**. A campanha tem um padrão, e cada rede pode ajustar na negociação. O simulador da rede compara a verba com o custo dos prêmios (faixas e/ou sorteio).
+
 ## Dois modos
 
 **Demonstração**: é o padrão e funciona assim que o arquivo é aberto. Os dados ficam só no aparelho. Use-o para apresentar a mecânica às redes na negociação: abra no tablet, cadastre um cliente, use "Preencher com cupom de teste", aprove o cupom na área da equipe e mostre o painel. PIN da equipe: `1234`.
 
 **Online (campanha real)**: os dados ficam num banco central (Supabase), e cliente, lojas e diretoria veem a mesma informação.
 1. Crie uma conta e um projeto em supabase.com. O plano gratuito atende para começar.
-2. Em SQL Editor, cole e rode `meta-premiada-supabase.sql`.
+2. Em SQL Editor, cole e rode `meta-premiada-supabase.sql`. O script pode ser rodado de novo nas atualizações do app sem apagar dados.
 3. Em Authentication › Users, crie o usuário (e-mail e senha) de cada pessoa da equipe. Depois, no SQL Editor: `insert into mp_admins(email) values ('email@empresa.com.br');`
 4. Em Settings › API, copie a *Project URL* e a chave *anon public* e cole no topo de `meta-premiada.html` (`SUPABASE_URL` e `SUPABASE_ANON_KEY`).
 5. Publique o arquivo num endereço com **https** (GitHub Pages, Netlify ou Vercel) para que a câmera do celular funcione.
@@ -30,6 +44,7 @@ Serve para qualquer campanha e qualquer marca: nome, marcas, cores, datas, faixa
 4. Gere o **Material de PDV** e o **link/QR Code** da rede.
 5. **Aprovar cupons**: a equipe confere a foto e aprova ou recusa. Alertas automáticos apontam os casos suspeitos.
 6. **Prêmios**: ranking por faixa e estoque, e registro de entrega com conferência de documento.
+   No sorteio: (1) **congele a lista de números** depois do prazo de envio, e ela é publicada no app com código de verificação SHA-256; (2) informe o concurso e o 1º prêmio da **Loteria Federal** e clique em Apurar. O resultado fica público e não pode ser refeito.
 7. **Clientes/CRM**: exporte a base. Para marketing, use só "quem autorizou".
 
 ## Controles de justiça e transparência
@@ -43,9 +58,13 @@ Serve para qualquer campanha e qualquer marca: nome, marcas, cores, datas, faixa
 - Auditoria de tudo (aprovações, recusas, mudanças, entregas e exportações). No modo online ela não pode ser apagada.
 - LGPD: aceite do regulamento obrigatório e consentimento de marketing separado e opcional, com data registrada.
 
+## Regra do sorteio (transparente e verificável)
+
+Em cada rede, os números ficam em ordem crescente. O 1º ganhador é o número na posição **(1º prêmio da Loteria Federal ÷ total de números da rede, resto da divisão) + 1**. Os demais prêmios vão para os números seguintes, com 1 prêmio por CPF. Qualquer participante confere a conta pela lista pública. **Ajuste o regulamento se o certificado de autorização definir outra forma de apuração.**
+
 ## Atenção legal
 
-O modo "compre e ganhe" (prêmio garantido por faixa) é o padrão. **Sorteio para consumidor exige autorização prévia da SPA/Ministério da Fazenda**, por isso o app só libera números da sorte com o número do certificado de autorização preenchido. Confirme tudo com o jurídico antes de lançar.
+**Sorteio para consumidor exige autorização prévia da SPA/Ministério da Fazenda.** No modo online, uma campanha com sorteio só pode ser ativada com o nº do certificado de autorização. Confirme tudo com o jurídico antes de lançar.
 
 ## Próximas melhorias sugeridas
 
