@@ -109,6 +109,7 @@ main{padding:8px 12px 0}
 <div id="hist" style="display:none"></div>
 <div class="ft" id="footer">
   <div style="flex:0 0 auto;text-align:center;padding:0 4px"><div id="tn">0</div><div class="tlab" id="tlab">itens</div></div>
+  <button id="bsave" style="flex:0 0 auto;border:none;background:var(--ok);color:#fff;border-radius:10px;padding:14px 14px;font-size:14px;font-weight:700;cursor:pointer">💾 Salvar</button>
   <button id="bnew" style="flex:0 0 auto;border:1px solid var(--ln);background:#fff;color:#374151;border-radius:10px;padding:14px 12px;font-size:13px;font-weight:700;cursor:pointer">🔄 Nova</button>
   <button id="ba" disabled>Gerar resumo</button>
 </div>
@@ -145,10 +146,9 @@ function selL(b){
   var novaLoja=b.textContent;
   if(novaLoja===lojaA){return;}
   if(_dirty&&temContagem()){
-    if(!confirm('Voce tem uma contagem nao salva da loja "'+lojaA+'".\n\nTrocar de loja SEM salvar vai manter os itens contados na tela. Deseja LIMPAR e comecar a contagem da nova loja do zero?\n\nOK = limpar e comecar do zero\nCancelar = manter a contagem atual')){
-      lojaA=novaLoja;document.querySelectorAll('.scc').forEach(function(x){x.classList.toggle('sel',x.textContent===lojaA)});sv();return;
-    }
+    salvarNoHistorico(true);
     limpaContagem(true);
+    tst('Contagem anterior salva no Historico ✓');
   }
   lojaA=novaLoja;document.querySelectorAll('.scc').forEach(function(x){x.classList.toggle('sel',x.textContent===lojaA)});sv();
 }
@@ -256,16 +256,18 @@ function tst(m){var t=$('tst');t.textContent=m;t.classList.add('sh');clearTimeou
 $('ba').addEventListener('click',function(){$('stit').textContent=tab==='v'?'Resumo do dia':'Inventario';$('spv').textContent=bWA();$('ovRes').classList.add('sh')});
 $('bwa').addEventListener('click',function(){cp(bWA(),'Copiado! Cole no WhatsApp.')});
 $('bcsv').addEventListener('click',function(){cp(bCSV(),'CSV copiado!')});
-$('bsv').addEventListener('click',function(){
+function salvarNoHistorico(silent){
   var src=tab==='v'?PV.filter(function(p){return(qV[p.id]||0)>0}):PI.filter(function(p){return qI[p.id]!==undefined});
-  if(!src.length){tst('Nada para salvar');return;}
+  if(!src.length){if(!silent)tst('Nada para salvar');return false;}
   var obs=($('obs')&&$('obs').value)||'';obs=obs.trim();
   var reg={ts:Date.now(),dt:fd($('dt').value),promo:CFG.nome,loja:lojaA,obs:obs,tipo:tab,
     linhas:src.map(function(p){return{b:p.b,c:p.cat,l:p.label,r:p.ref,e:p.ean,q:tab==='v'?qV[p.id]:qI[p.id]}})};
-  var h=getH();h.unshift(reg);if(h.length>200)h=h.slice(0,200);setH(h);
-  $('ovRes').classList.remove('sh');
-  _cd();tst('Salvo no Historico! (a contagem continua na tela)');
-});
+  var h=getH();h.unshift(reg);if(h.length>300)h=h.slice(0,300);setH(h);
+  _cd();
+  if(!silent)tst('✓ Salvo no Historico!');
+  return true;
+}
+$('bsv').addEventListener('click',function(){if(salvarNoHistorico(false)){$('ovRes').classList.remove('sh');}});
 function renderHist(){
   var h=getH();
   if(!h.length){$('hist').innerHTML='<div class="hempty">Nenhum registro salvo ainda.<br>Faca uma contagem, toque em "Gerar resumo" e depois "Salvar no historico".</div>';return;}
@@ -291,6 +293,7 @@ function histCSV(i){var reg=getH()[i];if(reg)cp(bCSVfromReg(reg),'CSV copiado!')
 function histView(i){var reg=getH()[i];if(!reg)return;$('stit').textContent=(reg.tipo==='v'?'Vendas':'Inventario')+' - '+(reg.loja||'--');$('spv').textContent=bWAfromReg(reg);$('ovRes').classList.add('sh');}
 document.querySelectorAll('[data-cl]').forEach(function(b){b.addEventListener('click',function(){b.closest('.ov').classList.remove('sh')})});
 document.querySelectorAll('.ov').forEach(function(o){o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('sh')})});
+if($('bsave'))$('bsave').addEventListener('click',function(){salvarNoHistorico(false);});
 if($('bnew'))$('bnew').addEventListener('click',function(){
   if(!temContagem()){tst('Nada para limpar');return;}
   if(confirm('Comecar uma NOVA contagem?\n\nIsso vai apagar os itens contados na tela agora. Se ainda nao salvou no Historico, salve antes.\n\nOK = limpar tudo\nCancelar = manter')){limpaContagem(false);}
